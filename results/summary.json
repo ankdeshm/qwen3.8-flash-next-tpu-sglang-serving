@@ -1,0 +1,977 @@
+{
+  "updated_at_utc": "2026-11-03T10:14:03.260160+00:00",
+  "title": "Qwen3.8-Flash-Next (Qwen4ExpForConditionalGeneration: 48 layers = 36 Gated-DeltaNet + 12 full attention, 512 experts top-10, hyper-connections x4, per-layer n-gram embedding, MTP head) on One TPU v7x Host (4 Chips / 8 TensorCores) with SGLang-TorchTPU v0.2.0",
+  "model_repo": "Qwen/Qwen3.8-Flash-Next-FP8, Qwen/Qwen3.8-Flash-Next (BF16), RadixArk/Qwen3.8-Flash-Next-NVFP4",
+  "model_gb": 185.6,
+  "image": "sglang-torchtpu-diffusion:v0.2.0",
+  "run_id": "qwen38_flash_next_sglang_v7x_1host_20261103T085724Z",
+  "gcs_uri": "gs://YOUR_GCS_BUCKET/benchmark-results/qwen38_flash_next_sglang_v7x_1host_20261103T085724Z",
+  "plan": {
+    "tag": "qwen38_flash_next_sglang_v7x_1host",
+    "title": "Qwen3.8-Flash-Next (Qwen4ExpForConditionalGeneration: 48 layers = 36 Gated-DeltaNet + 12 full attention, 512 experts top-10, hyper-connections x4, per-layer n-gram embedding, MTP head) on One TPU v7x Host (4 Chips / 8 TensorCores) with SGLang-TorchTPU v0.2.0",
+    "model_repo": "Qwen/Qwen3.8-Flash-Next-FP8, Qwen/Qwen3.8-Flash-Next (BF16), RadixArk/Qwen3.8-Flash-Next-NVFP4",
+    "model_gb": 185.6,
+    "image": "sglang-torchtpu-diffusion:v0.2.0",
+    "model_gcs": "gs://YOUR_GCS_BUCKET/models/Qwen/Qwen3.8-Flash-Next-FP8",
+    "port": 30000,
+    "server_home": "/dev/shm/q38_home",
+    "gsm8k": {
+      "num_questions": 200,
+      "num_shots": 5,
+      "parallel": 64,
+      "max_new_tokens": 512,
+      "data_path": "/dev/shm/q38_gsm8k_test.jsonl"
+    },
+    "server_args": {
+      "served_model_name": "Qwen/Qwen3.8-Flash-Next",
+      "trust_remote_code": true,
+      "watchdog_timeout": 3600,
+      "page_size": 256,
+      "context_length": 135168,
+      "chunked_prefill_size": 8192,
+      "max_prefill_tokens": 8192,
+      "tpu_compile_tokens": [
+        1024,
+        4096,
+        8192
+      ],
+      "mem_fraction_static": 0.85,
+      "disable_radix_cache": true,
+      "json_model_override_args": "{\"indexer_n_heads\": null, \"text_config\": {\"indexer_n_heads\": null}}"
+    },
+    "runtime_env": {
+      "SGLANG_MAMBA_SSM_DTYPE": "float32",
+      "SGLANG_TPU_VIT_PRECOMPILE_SIZES": "",
+      "TORCH_LOGS": "-dynamo"
+    },
+    "extra_libtpu": [
+      "--xla_tpu_buffer_assignment_enable_fast_merge_fallback=false"
+    ],
+    "workloads": [
+      [
+        1024,
+        1024,
+        [
+          1,
+          4,
+          16,
+          32,
+          64
+        ]
+      ],
+      [
+        4096,
+        1024,
+        [
+          1,
+          4,
+          16,
+          32,
+          64
+        ]
+      ],
+      [
+        65536,
+        1024,
+        [
+          1,
+          4,
+          8
+        ]
+      ],
+      [
+        131072,
+        512,
+        [
+          1,
+          4
+        ]
+      ]
+    ],
+    "variants": [
+      {
+        "name": "q38_fp8_tp8_ep8",
+        "desc": "FP8 W8A8 (128x128 blockwise runtime scales), TP=8 x EP=8, BF16 KV",
+        "ready_timeout_s": 5400,
+        "server_args": {
+          "tp_size": 8,
+          "ep_size": 8,
+          "quantization": "fp8",
+          "kv_cache_dtype": "bfloat16",
+          "tpu_fp8_runtime": "blockwise",
+          "max_running_requests": 64,
+          "torch_compile_max_bs": 64,
+          "tpu_compile_bs": [
+            1,
+            4,
+            8,
+            16,
+            32,
+            64
+          ],
+          "max_total_tokens": 1310720,
+          "max_mamba_cache_size": 160
+        },
+        "runtime_env": {
+          "SGLANG_TPU_FP8_MOE_FP32_SCALES": "1"
+        }
+      },
+      {
+        "name": "q38_fp8_tp8_ep8_mtp3",
+        "desc": "FP8 W8A8 (blockwise), TP=8 x EP=8, BF16 KV + MTP speculative decoding (NEXTN, 3 steps, topk 1, 4 draft tokens)",
+        "ready_timeout_s": 5400,
+        "gsm8k": {
+          "num_questions": 200,
+          "num_shots": 5,
+          "parallel": 32,
+          "max_new_tokens": 512,
+          "data_path": "/dev/shm/q38_gsm8k_test.jsonl"
+        },
+        "server_args": {
+          "tp_size": 8,
+          "ep_size": 8,
+          "quantization": "fp8",
+          "kv_cache_dtype": "bfloat16",
+          "tpu_fp8_runtime": "blockwise",
+          "max_running_requests": 32,
+          "torch_compile_max_bs": 32,
+          "tpu_compile_bs": [
+            1,
+            4,
+            16,
+            32
+          ],
+          "max_total_tokens": 1048576,
+          "max_mamba_cache_size": 96,
+          "tpu_compile_tracer": "direct",
+          "speculative_algorithm": "NEXTN",
+          "speculative_num_steps": 3,
+          "speculative_eagle_topk": 1,
+          "speculative_num_draft_tokens": 4,
+          "gc_threshold": [
+            50000,
+            100,
+            100
+          ]
+        },
+        "runtime_env": {
+          "SGLANG_TPU_ENABLE_EXPERIMENTAL_SPEC_WORKER": "1",
+          "SGLANG_SPEC_TP_SYNC": "rng",
+          "SGLANG_RAGGED_VERIFY_MODE": "static",
+          "SGLANG_TPU_ENABLE_NN_MODULE_GUARD_FILTER": "1",
+          "SGLANG_TPU_FP8_MOE_FP32_SCALES": "1"
+        },
+        "workloads": [
+          [
+            1024,
+            1024,
+            [
+              1,
+              4,
+              16,
+              32
+            ]
+          ],
+          [
+            4096,
+            1024,
+            [
+              1,
+              4,
+              16,
+              32
+            ]
+          ],
+          [
+            65536,
+            1024,
+            [
+              1
+            ]
+          ]
+        ]
+      },
+      {
+        "name": "q38_fp8_dp2attn_ep8",
+        "desc": "FP8 W8A8 (blockwise), TP=8 x DP=2 (dp-attention, 2x attn-TP4 + DP LM head) x EP=8, BF16 KV",
+        "ready_timeout_s": 5400,
+        "server_args": {
+          "tp_size": 8,
+          "dp_size": 2,
+          "enable_dp_attention": true,
+          "enable_dp_lm_head": true,
+          "ep_size": 8,
+          "quantization": "fp8",
+          "kv_cache_dtype": "bfloat16",
+          "tpu_fp8_runtime": "blockwise",
+          "max_running_requests": 128,
+          "torch_compile_max_bs": 64,
+          "tpu_compile_bs": [
+            1,
+            2,
+            4,
+            8,
+            16,
+            32,
+            64
+          ],
+          "max_total_tokens": 1310720,
+          "max_mamba_cache_size": 320
+        },
+        "runtime_env": {
+          "SGLANG_USE_ATTN_TP_NGRAM": "1",
+          "SGLANG_TPU_FP8_MOE_FP32_SCALES": "1"
+        },
+        "workloads": [
+          [
+            1024,
+            1024,
+            [
+              1,
+              4,
+              16,
+              32,
+              64
+            ]
+          ],
+          [
+            4096,
+            1024,
+            [
+              1,
+              16,
+              64
+            ]
+          ],
+          [
+            65536,
+            1024,
+            [
+              1,
+              4
+            ]
+          ]
+        ]
+      },
+      {
+        "name": "q38_nvfp4_tp8_ep8",
+        "desc": "NVFP4 experts (RadixArk modelopt_fp4, group_size=16) via Pallas fused-RS MoE, TP=8 x EP=8, BF16 KV",
+        "model_gcs": "gs://YOUR_GCS_BUCKET/models/RadixArk/Qwen3.8-Flash-Next-NVFP4",
+        "ready_timeout_s": 5400,
+        "server_args": {
+          "tp_size": 8,
+          "ep_size": 8,
+          "quantization": "modelopt_fp4",
+          "moe_runner_backend": "pallas_tpu_fused_rs",
+          "kv_cache_dtype": "bfloat16",
+          "max_running_requests": 64,
+          "torch_compile_max_bs": 64,
+          "tpu_compile_bs": [
+            1,
+            4,
+            16,
+            32,
+            64
+          ],
+          "max_total_tokens": 1310720,
+          "max_mamba_cache_size": 160
+        },
+        "extra_libtpu": [
+          "--xla_tpu_enable_sparse_core_collective_offload_all_gather=false"
+        ],
+        "workloads": [
+          [
+            1024,
+            1024,
+            [
+              1,
+              4,
+              16,
+              32,
+              64
+            ]
+          ],
+          [
+            4096,
+            1024,
+            [
+              1,
+              4,
+              16,
+              32,
+              64
+            ]
+          ],
+          [
+            65536,
+            1024,
+            [
+              1,
+              4
+            ]
+          ],
+          [
+            131072,
+            512,
+            [
+              1
+            ]
+          ]
+        ]
+      },
+      {
+        "name": "q38_bf16_tp8_ep8",
+        "desc": "BF16 unquantized weights + BF16 KV, TP=8 x EP=8",
+        "model_gcs": "gs://YOUR_GCS_BUCKET/models/Qwen/Qwen3.8-Flash-Next",
+        "ready_timeout_s": 5400,
+        "server_args": {
+          "tp_size": 8,
+          "ep_size": 8,
+          "quantization": "unquant",
+          "kv_cache_dtype": "bfloat16",
+          "max_running_requests": 64,
+          "torch_compile_max_bs": 64,
+          "tpu_compile_bs": [
+            1,
+            4,
+            16,
+            32,
+            64
+          ],
+          "max_total_tokens": 1048576,
+          "max_mamba_cache_size": 160,
+          "mem_fraction_static": 0.9
+        },
+        "workloads": [
+          [
+            1024,
+            1024,
+            [
+              1,
+              4,
+              16,
+              32,
+              64
+            ]
+          ],
+          [
+            4096,
+            1024,
+            [
+              1,
+              4,
+              16,
+              32,
+              64
+            ]
+          ],
+          [
+            65536,
+            1024,
+            [
+              1,
+              4
+            ]
+          ],
+          [
+            131072,
+            512,
+            [
+              1
+            ]
+          ]
+        ]
+      },
+      {
+        "name": "q38_bf16_tp8_ep1",
+        "desc": "BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad)",
+        "model_gcs": "gs://YOUR_GCS_BUCKET/models/Qwen/Qwen3.8-Flash-Next",
+        "ready_timeout_s": 5400,
+        "server_args": {
+          "tp_size": 8,
+          "ep_size": 1,
+          "quantization": "unquant",
+          "kv_cache_dtype": "bfloat16",
+          "max_running_requests": 64,
+          "torch_compile_max_bs": 64,
+          "tpu_compile_bs": [
+            1,
+            4,
+            16,
+            32,
+            64
+          ],
+          "max_total_tokens": 786432,
+          "max_mamba_cache_size": 160,
+          "mem_fraction_static": 0.9
+        },
+        "workloads": [
+          [
+            1024,
+            1024,
+            [
+              1,
+              4,
+              16,
+              32,
+              64
+            ]
+          ],
+          [
+            4096,
+            1024,
+            [
+              1,
+              16,
+              64
+            ]
+          ],
+          [
+            65536,
+            1024,
+            [
+              1
+            ]
+          ],
+          [
+            131072,
+            512,
+            [
+              1
+            ]
+          ]
+        ]
+      }
+    ]
+  },
+  "runtime_patches": [
+    "layernorm_gated.py (native-torch RMSNormGated): add the sigmoid gate, rmsnorm(x)*sigmoid(z), used by the Qwen3.8 Gated-DeltaNet output norm (TPU fallback only implemented SiLU)",
+    "qwen4_exp.py PLE (per-layer n-gram embedding, layer 2) made TorchTPU-traceable (block appended from q38_qwen4_exp_tpu_ple.py): _PLEBatch msgspec.Struct -> NamedTuple (Dynamo cannot construct msgspec Structs); padded static shapes (no slicing by host real-token counts -> no per-prompt-length recompiles); flat token-major EXTEND layout for n-gram windows / short-conv taps / state commit; fresh requests (extend_prefix_lens==0) start from zero short-conv state + EOS n-gram history in-graph (TpuMambaPool.clear_slots never resets the PLE side-state pools -> cross-request state leak otherwise); int32-only integer math with an exact base-2^12-limb evaluation of the int64 n-gram hash (the TPU XLA backend aborts on the s64 multiply/xor/remainder/cumsum), hash constants checked against the loaded buffers; no CUDA/Triton fused kernels, no cummax/cumsum. Same math: CPU-verified bit-exact vs upstream (extend with padding/chunk continuation/EOS, decode with padded rows, MTP verify, 200k-window hash sweep)",
+    "ple_state_pool.py NGramPool: int32 instead of int64 storage/indices (token ids < 2^31) so the TPU graph carries no s64 PLE state",
+    "qwen4_exp_mtp.py Qwen4ExpForCausalLMMTP._set_hc_logits_hidden_states: replace int64 torch.cumsum with int32 lower-triangular prefix sum + clamp(min=0) so MTP draft-extend avoids TPU XLA U64 windowing abort",
+    "modelopt_quant.py + qwen2_moe.py: set TpuModelOptNvFp4FusedMoEMethod.use_flashinfer_trtllm_weight_layout = False, opt Qwen2MoeSparseMoeBlock into allow_backend_reduction=True for FP4 quant configs, and pre-scale already-TP-summed fused-RS routed outputs by 1/tp_size before adding the unreduced shared expert so the single downstream TP all-reduce sums routed + shared experts exactly once"
+  ],
+  "server_home": "/dev/shm/q38_home",
+  "variants": [
+    {
+      "name": "q38_fp8_tp8_ep8",
+      "desc": "FP8 W8A8 (128x128 blockwise runtime scales), TP=8 x EP=8, BF16 KV",
+      "status": "DONE",
+      "cells": [
+        {
+          "input_len": 1024,
+          "output_len": 1024,
+          "concurrency": 1,
+          "num_prompts": 4,
+          "return_code": 0,
+          "wall_s": 112.1,
+          "metrics": {
+            "completed": 4,
+            "duration": 98.65347610099707,
+            "request_throughput": 0.040545961055695356,
+            "input_throughput": 41.519064121032045,
+            "output_throughput": 41.519064121032045,
+            "total_throughput": 83.03812824206409,
+            "mean_ttft_ms": 130.2025130007678,
+            "median_ttft_ms": 127.97225800022716,
+            "p99_ttft_ms": 143.55633624916663,
+            "mean_tpot_ms": 23.972031138073753,
+            "median_tpot_ms": 23.97050613636563,
+            "p99_tpot_ms": 24.05183144919485,
+            "mean_itl_ms": 23.971999072583596,
+            "median_itl_ms": 23.913518998597283,
+            "p99_itl_ms": 25.74200012233632,
+            "mean_e2e_latency_ms": 24653.590367250217,
+            "accept_length": null,
+            "total_input_tokens": 4096,
+            "total_output_tokens": 4096
+          }
+        },
+        {
+          "input_len": 1024,
+          "output_len": 1024,
+          "concurrency": 4,
+          "num_prompts": 12,
+          "return_code": 0,
+          "wall_s": 91.0,
+          "metrics": {
+            "completed": 12,
+            "duration": 77.16527811099513,
+            "request_throughput": 0.15551035768625246,
+            "input_throughput": 159.24260627072252,
+            "output_throughput": 159.24260627072252,
+            "total_throughput": 318.48521254144504,
+            "mean_ttft_ms": 285.94111649969517,
+            "median_ttft_ms": 280.49754099629354,
+            "p99_ttft_ms": 358.88059340773907,
+            "mean_tpot_ms": 24.8514199422456,
+            "median_tpot_ms": 24.79515036656865,
+            "p99_tpot_ms": 25.143311097497197,
+            "mean_itl_ms": 24.851391558814957,
+            "median_itl_ms": 24.768054998276057,
+            "p99_itl_ms": 26.587312500851112,
+            "mean_e2e_latency_ms": 25708.94371741694,
+            "accept_length": null,
+            "total_input_tokens": 12288,
+            "total_output_tokens": 12288
+          }
+        },
+        {
+          "input_len": 1024,
+          "output_len": 1024,
+          "concurrency": 16,
+          "num_prompts": 48,
+          "return_code": 0,
+          "wall_s": 103.3,
+          "metrics": {
+            "completed": 48,
+            "duration": 90.4103999220024,
+            "request_throughput": 0.530912373370872,
+            "input_throughput": 543.654270331773,
+            "output_throughput": 543.654270331773,
+            "total_throughput": 1087.308540663546,
+            "mean_ttft_ms": 734.9419016244004,
+            "median_ttft_ms": 923.0728285001533,
+            "p99_ttft_ms": 1004.5153687568383,
+            "mean_tpot_ms": 28.72599928547584,
+            "median_tpot_ms": 28.62927007087427,
+            "p99_tpot_ms": 29.287509046511772,
+            "mean_itl_ms": 28.72949920161752,
+            "median_itl_ms": 28.473250498791458,
+            "p99_itl_ms": 30.547065351493075,
+            "mean_e2e_latency_ms": 30121.639170666185,
+            "accept_length": null,
+            "total_input_tokens": 49152,
+            "total_output_tokens": 49152
+          }
+        },
+        {
+          "input_len": 1024,
+          "output_len": 1024,
+          "concurrency": 32,
+          "num_prompts": 96,
+          "return_code": 0,
+          "wall_s": 115.1,
+          "metrics": {
+            "completed": 96,
+            "duration": 102.05030412300403,
+            "request_throughput": 0.9407125321673571,
+            "input_throughput": 963.2896329393736,
+            "output_throughput": 963.2896329393736,
+            "total_throughput": 1926.5792658787473,
+            "mean_ttft_ms": 1258.970440624959,
+            "median_ttft_ms": 1363.0092294988572,
+            "p99_ttft_ms": 1927.1296491479006,
+            "mean_tpot_ms": 32.00519437090673,
+            "median_tpot_ms": 31.913931776636115,
+            "p99_tpot_ms": 32.79219214604299,
+            "mean_itl_ms": 32.010400169687685,
+            "median_itl_ms": 31.39329599798657,
+            "p99_itl_ms": 32.96378655832086,
+            "mean_e2e_latency_ms": 34000.284282062545,
+            "accept_length": null,
+            "total_input_tokens": 98304,
+            "total_output_tokens": 98304
+          }
+        },
+        {
+          "input_len": 1024,
+          "output_len": 1024,
+          "concurrency": 64,
+          "num_prompts": 192,
+          "return_code": 0,
+          "wall_s": 164.2,
+          "metrics": {
+            "completed": 192,
+            "duration": 151.07036741000047,
+            "request_throughput": 1.2709309131347892,
+            "input_throughput": 1301.4332550500242,
+            "output_throughput": 1301.4332550500242,
+            "total_throughput": 2602.8665101000483,
+            "mean_ttft_ms": 2640.083413057065,
+            "median_ttft_ms": 2237.737114501215,
+            "p99_ttft_ms": 7172.716095046766,
+            "mean_tpot_ms": 38.62148179743508,
+            "median_tpot_ms": 38.72965243890673,
+            "p99_tpot_ms": 40.4728973849429,
+            "mean_itl_ms": 38.62677818648204,
+            "median_itl_ms": 37.433892000990454,
+            "p99_itl_ms": 38.892775200656615,
+            "mean_e2e_latency_ms": 42149.859291833156,
+            "accept_length": null,
+            "total_input_tokens": 196608,
+            "total_output_tokens": 196608
+          }
+        },
+        {
+          "input_len": 4096,
+          "output_len": 1024,
+          "concurrency": 1,
+          "num_prompts": 4,
+          "return_code": 0,
+          "wall_s": 112.6,
+          "metrics": {
+            "completed": 4,
+            "duration": 99.67343740600336,
+            "request_throughput": 0.04013105300770011,
+            "input_throughput": 164.37679311953966,
+            "output_throughput": 41.094198279884914,
+            "total_throughput": 205.47099139942458,
+            "mean_ttft_ms": 276.0071862485347,
+            "median_ttft_ms": 278.8756319969252,
+            "p99_ttft_ms": 280.86428608745337,
+            "mean_tpot_ms": 24.079133591887338,
+            "median_tpot_ms": 24.078668966277117,
+            "p99_tpot_ms": 24.085792582034305,
+            "mean_itl_ms": 24.079065813783487,
+            "median_itl_ms": 24.017997999180807,
+            "p99_itl_ms": 25.82461217367382,
+            "mean_e2e_latency_ms": 24908.96085074928,
+            "accept_length": null,
+            "total_input_tokens": 16384,
+            "total_output_tokens": 4096
+          }
+        },
+        {
+          "input_len": 4096,
+          "output_len": 1024,
+          "concurrency": 4,
+          "num_prompts": 12,
+          "return_code": 0,
+          "wall_s": 92.4,
+          "metrics": {
+            "completed": 12,
+            "duration": 79.17265430100088,
+            "request_throughput": 0.15156748382311466,
+            "input_throughput": 620.8204137394777,
+            "output_throughput": 155.20510343486941,
+            "total_throughput": 776.0255171743471,
+            "mean_ttft_ms": 691.235818503022,
+            "median_ttft_ms": 709.5404300016526,
+            "p99_ttft_ms": 945.2552400754212,
+            "mean_tpot_ms": 25.109502470103543,
+            "median_tpot_ms": 25.09865343597395,
+            "p99_tpot_ms": 25.507058272461382,
+            "mean_itl_ms": 25.109491695176676,
+            "median_itl_ms": 24.806456996884663,
+            "p99_itl_ms": 26.77192775263393,
+            "mean_e2e_latency_ms": 26378.256845418946,
+            "accept_length": null,
+            "total_input_tokens": 49152,
+            "total_output_tokens": 12288
+          }
+        },
+        {
+          "input_len": 4096,
+          "output_len": 1024,
+          "concurrency": 16,
+          "num_prompts": 48,
+          "return_code": 0,
+          "wall_s": 112.6,
+          "metrics": {
+            "completed": 48,
+            "duration": 99.14838179700018,
+            "request_throughput": 0.4841228785586925,
+            "input_throughput": 1982.9673105764045,
+            "output_throughput": 495.74182764410114,
+            "total_throughput": 2478.709138220506,
+            "mean_ttft_ms": 2149.9617903753765,
+            "median_ttft_ms": 2254.328232502303,
+            "p99_ttft_ms": 3634.7325474287936,
+            "mean_tpot_ms": 30.18982684410607,
+            "median_tpot_ms": 30.173219358747954,
+            "p99_tpot_ms": 31.929104010911814,
+            "mean_itl_ms": 30.192876026436178,
+            "median_itl_ms": 28.77246199932415,
+            "p99_itl_ms": 30.57925133893149,
+            "mean_e2e_latency_ms": 33034.154651895886,
+            "accept_length": null,
+            "total_input_tokens": 196608,
+            "total_output_tokens": 49152
+          }
+        },
+        {
+          "input_len": 4096,
+          "output_len": 1024,
+          "concurrency": 32,
+          "num_prompts": 96,
+          "return_code": 0,
+          "wall_s": 134.1,
+          "metrics": {
+            "completed": 96,
+            "duration": 120.0834780610021,
+            "request_throughput": 0.7994438664678937,
+            "input_throughput": 3274.5220770524925,
+            "output_throughput": 818.6305192631231,
+            "total_throughput": 4093.1525963156155,
+            "mean_ttft_ms": 4125.566963478907,
+            "median_ttft_ms": 4136.695731500367,
+            "p99_ttft_ms": 7244.802057799461,
+            "mean_tpot_ms": 35.07907342371295,
+            "median_tpot_ms": 34.97193361045926,
+            "p99_tpot_ms": 38.86466444169377,
+            "mean_itl_ms": 35.0833284698363,
+            "median_itl_ms": 32.1229735018278,
+            "p99_itl_ms": 33.84329190339486,
+            "mean_e2e_latency_ms": 40011.45907593726,
+            "accept_length": null,
+            "total_input_tokens": 393216,
+            "total_output_tokens": 98304
+          }
+        },
+        {
+          "input_len": 4096,
+          "output_len": 1024,
+          "concurrency": 64,
+          "num_prompts": 192,
+          "return_code": 0,
+          "wall_s": 200.6,
+          "metrics": {
+            "completed": 192,
+            "duration": 187.1044196139992,
+            "request_throughput": 1.026164963906788,
+            "input_throughput": 4203.171692162204,
+            "output_throughput": 1050.792923040551,
+            "total_throughput": 5253.964615202754,
+            "mean_ttft_ms": 8899.375028791648,
+            "median_ttft_ms": 8891.874789002031,
+            "p99_ttft_ms": 17895.915750051052,
+            "mean_tpot_ms": 44.163101951322496,
+            "median_tpot_ms": 43.893814782013386,
+            "p99_tpot_ms": 52.14139978414271,
+            "mean_itl_ms": 44.169603814891204,
+            "median_itl_ms": 38.70411600655643,
+            "p99_itl_ms": 40.28003919942421,
+            "mean_e2e_latency_ms": 54078.22832499456,
+            "accept_length": null,
+            "total_input_tokens": 786432,
+            "total_output_tokens": 196608
+          }
+        },
+        {
+          "input_len": 65536,
+          "output_len": 1024,
+          "concurrency": 1,
+          "num_prompts": 2,
+          "return_code": 0,
+          "wall_s": 74.1,
+          "metrics": {
+            "completed": 2,
+            "duration": 57.75719311799912,
+            "request_throughput": 0.034627721536154975,
+            "input_throughput": 2269.3623585934524,
+            "output_throughput": 35.458786853022694,
+            "total_throughput": 2304.821145446475,
+            "mean_ttft_ms": 3874.1352204997384,
+            "median_ttft_ms": 3874.1352204997384,
+            "p99_ttft_ms": 3885.762807307983,
+            "mean_tpot_ms": 24.424244675462173,
+            "median_tpot_ms": 24.424244675462173,
+            "p99_tpot_ms": 24.424649079213534,
+            "mean_itl_ms": 24.424161675950085,
+            "median_itl_ms": 24.37306250067195,
+            "p99_itl_ms": 26.035044500167714,
+            "mean_e2e_latency_ms": 28860.137523497542,
+            "accept_length": null,
+            "total_input_tokens": 131072,
+            "total_output_tokens": 2048
+          }
+        },
+        {
+          "input_len": 65536,
+          "output_len": 1024,
+          "concurrency": 4,
+          "num_prompts": 8,
+          "return_code": 0,
+          "wall_s": 101.3,
+          "metrics": {
+            "completed": 8,
+            "duration": 84.0639295919973,
+            "request_throughput": 0.09516566782956555,
+            "input_throughput": 6236.777206878408,
+            "output_throughput": 97.44964385747512,
+            "total_throughput": 6334.226850735883,
+            "mean_ttft_ms": 9510.471992375642,
+            "median_ttft_ms": 9514.175435000652,
+            "p99_ttft_ms": 15140.06193508867,
+            "mean_tpot_ms": 31.770483929007845,
+            "median_tpot_ms": 31.766830788368424,
+            "p99_tpot_ms": 37.296111783079844,
+            "mean_itl_ms": 31.770463439394664,
+            "median_itl_ms": 26.212236003630096,
+            "p99_itl_ms": 27.9579867477878,
+            "mean_e2e_latency_ms": 42011.67705175067,
+            "accept_length": null,
+            "total_input_tokens": 524288,
+            "total_output_tokens": 8192
+          }
+        },
+        {
+          "input_len": 65536,
+          "output_len": 1024,
+          "concurrency": 8,
+          "num_prompts": 16,
+          "return_code": 0,
+          "wall_s": 134.3,
+          "metrics": {
+            "completed": 16,
+            "duration": 117.6725184389943,
+            "request_throughput": 0.13597057505227936,
+            "input_throughput": 8910.96760662618,
+            "output_throughput": 139.23386885353406,
+            "total_throughput": 9050.201475479713,
+            "mean_ttft_ms": 17027.249690437657,
+            "median_ttft_ms": 17026.05022199714,
+            "p99_ttft_ms": 30179.14769340132,
+            "mean_tpot_ms": 40.8486941901276,
+            "median_tpot_ms": 40.85179232209558,
+            "p99_tpot_ms": 53.713627823365165,
+            "mean_itl_ms": 40.84868395576687,
+            "median_itl_ms": 27.958292001130758,
+            "p99_itl_ms": 30.092895645066164,
+            "mean_e2e_latency_ms": 58815.463846938204,
+            "accept_length": null,
+            "total_input_tokens": 1048576,
+            "total_output_tokens": 16384
+          }
+        },
+        {
+          "input_len": 131072,
+          "output_len": 512,
+          "concurrency": 1,
+          "num_prompts": 2,
+          "return_code": 0,
+          "wall_s": 63.2,
+          "metrics": {
+            "completed": 2,
+            "duration": 41.80884441800299,
+            "request_throughput": 0.04783676822071636,
+            "input_throughput": 6270.060884225734,
+            "output_throughput": 24.492425329006775,
+            "total_throughput": 6294.553309554742,
+            "mean_ttft_ms": 8211.567570000625,
+            "median_ttft_ms": 8211.567570000625,
+            "p99_ttft_ms": 8234.055963200153,
+            "mean_tpot_ms": 24.80168426027625,
+            "median_tpot_ms": 24.80168426027625,
+            "p99_tpot_ms": 24.80277080411488,
+            "mean_itl_ms": 24.80165856947506,
+            "median_itl_ms": 24.72402950297692,
+            "p99_itl_ms": 26.69421003694879,
+            "mean_e2e_latency_ms": 20885.22822700179,
+            "accept_length": null,
+            "total_input_tokens": 262144,
+            "total_output_tokens": 1024
+          }
+        },
+        {
+          "input_len": 131072,
+          "output_len": 512,
+          "concurrency": 4,
+          "num_prompts": 8,
+          "return_code": 0,
+          "wall_s": 114.0,
+          "metrics": {
+            "completed": 8,
+            "duration": 92.76092254099785,
+            "request_throughput": 0.08624321299159367,
+            "input_throughput": 11304.070413234165,
+            "output_throughput": 44.15652505169596,
+            "total_throughput": 11348.226938285861,
+            "mean_ttft_ms": 20211.45681512553,
+            "median_ttft_ms": 20225.547490499594,
+            "p99_ttft_ms": 32211.651603263454,
+            "mean_tpot_ms": 51.16677098678886,
+            "median_tpot_ms": 51.155646163406956,
+            "p99_tpot_ms": 74.73250584394337,
+            "mean_itl_ms": 51.166723628420826,
+            "median_itl_ms": 27.662079497531522,
+            "p99_itl_ms": 29.5594870277273,
+            "mean_e2e_latency_ms": 46357.67678937464,
+            "accept_length": null,
+            "total_input_tokens": 1048576,
+            "total_output_tokens": 4096
+          }
+        }
+      ],
+      "server_args": {
+        "model_path": "/dev/shm/models/Qwen3.8-Flash-Next-FP8",
+        "port": 30000,
+        "served_model_name": "Qwen/Qwen3.8-Flash-Next",
+        "trust_remote_code": true,
+        "watchdog_timeout": 3600,
+        "page_size": 256,
+        "context_length": 135168,
+        "chunked_prefill_size": 8192,
+        "max_prefill_tokens": 8192,
+        "tpu_compile_tokens": [
+          1024,
+          4096,
+          8192
+        ],
+        "mem_fraction_static": 0.85,
+        "disable_radix_cache": true,
+        "json_model_override_args": "{\"indexer_n_heads\": null, \"text_config\": {\"indexer_n_heads\": null}}",
+        "tp_size": 8,
+        "ep_size": 8,
+        "quantization": "fp8",
+        "kv_cache_dtype": "bfloat16",
+        "tpu_fp8_runtime": "blockwise",
+        "max_running_requests": 64,
+        "torch_compile_max_bs": 64,
+        "tpu_compile_bs": [
+          1,
+          4,
+          8,
+          16,
+          32,
+          64
+        ],
+        "max_total_tokens": 1310720,
+        "max_mamba_cache_size": 160
+      },
+      "runtime_env": {
+        "FORCE_SINGLE_HOST": "1",
+        "SGLANG_MAMBA_SSM_DTYPE": "float32",
+        "SGLANG_TPU_VIT_PRECOMPILE_SIZES": "",
+        "TORCH_LOGS": "-dynamo",
+        "SGLANG_TPU_FP8_MOE_FP32_SCALES": "1"
+      },
+      "extra_libtpu": [
+        "--xla_tpu_buffer_assignment_enable_fast_merge_fallback=false"
+      ],
+      "server_ready_s": 1581.1,
+      "smoke": [
+        {
+          "prompt": "The capital of France is",
+          "completion": " Paris. The capital of Germany is Berlin. The capital of Italy is Rome. The capital of Spain is Madrid. The capital of Portugal is",
+          "n_nan_logprob": 0,
+          "latency_s": 0.97
+        },
+        {
+          "prompt": "Q: Join has 3 apples and buys 4 more. How many apples does Join have?\nA: Join starts with 3 apples and buys 4 more, so 3 + 4 =",
+          "completion": " 7. Join has 7 apples.",
+          "n_nan_logprob": 0,
+          "latency_s": 0.36
+        },
+        {
+          "prompt": "def fibonacci(n: int) -> int:\n    \"\"\"Return the n-th Fibonacci number.\"\"\"\n",
+          "completion": "    if n < 0:\n        raise ValueError(\"Input must be a non-negative integer\")\n    if n <= 1:\n        return n\n    return fibonacci(n - 1) + fibonacci(n - 2)\n\n\ndef test_fibonacci():\n    assert fibonacci(0) == ",
+          "n_nan_logprob": 0,
+          "latency_s": 1.77
+        }
+      ],
+      "gsm8k": {
+        "num_questions": 200,
+        "num_shots": 5,
+        "parallel": 64,
+        "return_code": 0,
+        "wall_s": 38.4,
+        "accuracy": 0.17,
+        "invalid": 0.65,
+        "latency": 31.957,
+        "output_throughput": 581.601
+      }
+    }
+  ]
+}

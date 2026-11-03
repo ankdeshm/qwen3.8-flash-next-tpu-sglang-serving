@@ -1,0 +1,87 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: q38-sglang-v7x-sweep
+  namespace: default
+  labels:
+    app: q38-sglang-sweep
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: q38-sglang-sweep
+      annotations:
+        gke-gcsfuse/volumes: "true"
+        gke-gcsfuse/cpu-limit: "0"
+        gke-gcsfuse/memory-limit: "0"
+        gke-gcsfuse/ephemeral-storage-limit: "0"
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+    spec:
+      restartPolicy: Never
+      terminationGracePeriodSeconds: 30
+      serviceAccountName: default
+      nodeSelector:
+        cloud.google.com/gke-nodepool: tpu-v7x-8-pool-a
+        cloud.google.com/gke-tpu-accelerator: tpu7x
+        cloud.google.com/gke-tpu-topology: 2x2x2
+        kubernetes.io/hostname: tpu-worker-node
+      tolerations:
+      - key: google.com/tpu
+        operator: Exists
+        effect: NoSchedule
+      - key: cloud.google.com/gke-queued
+        operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: sglang
+        image: us-central1-docker.pkg.dev/your-gcp-project-id/vllm/sglang-torchtpu-diffusion:v0.2.0
+        imagePullPolicy: IfNotPresent
+        workingDir: /workspace/sglang
+        command: ["bash", "-lc"]
+        args:
+        - |
+          set -euo pipefail
+          ulimit -c 0
+          mkdir -p /dev/shm/q38_home/.cache /dev/shm/q38_results
+          python3 /sweep/q38_patches.py
+          python3 /sweep/test_q38_ple_equivalence.py /sweep/q38_qwen4_exp_tpu_ple.py
+          python3 /sweep/run_q38_sglang_sweep.py \
+            --plan /sweep/plan_q38_full.json \
+            --out-root /dev/shm/q38_results \
+            --mirror-root /models/benchmark-results \
+            --gcs-root gs://your-gcs-model-bucket/benchmark-results
+        env:
+        - name: HF_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: hf-token
+              key: HF_TOKEN
+        - name: PJRT_DEVICE
+          value: "TPU"
+        resources:
+          requests:
+            google.com/tpu: "4"
+            cpu: "96"
+            memory: 400Gi
+          limits:
+            google.com/tpu: "4"
+        volumeMounts:
+        - name: models-gcs
+          mountPath: /models
+        - name: sweep
+          mountPath: /sweep
+        - name: dshm
+          mountPath: /dev/shm
+      volumes:
+      - name: models-gcs
+        persistentVolumeClaim:
+          claimName: tpu-models-gcs-pvc
+      - name: sweep
+        configMap:
+          name: q38-sglang-sweep-scripts
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 700Gi

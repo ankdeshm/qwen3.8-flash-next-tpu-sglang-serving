@@ -1,0 +1,212 @@
+{
+  "tag": "qwen38_flash_next_sglang_v7x_1host",
+  "title": "Qwen3.8-Flash-Next (Qwen4ExpForConditionalGeneration: 48 layers = 36 Gated-DeltaNet + 12 full attention, 512 experts top-10, hyper-connections x4, per-layer n-gram embedding, MTP head) on One TPU v7x Host (4 Chips / 8 TensorCores) with SGLang-TorchTPU v0.2.0",
+  "model_repo": "Qwen/Qwen3.8-Flash-Next-FP8, Qwen/Qwen3.8-Flash-Next (BF16), RadixArk/Qwen3.8-Flash-Next-NVFP4",
+  "model_gb": 185.6,
+  "image": "sglang-torchtpu-diffusion:v0.2.0",
+  "model_gcs": "gs://YOUR_GCS_BUCKET/models/Qwen/Qwen3.8-Flash-Next-FP8",
+  "port": 30000,
+  "server_home": "/dev/shm/q38_home",
+  "gsm8k": {
+    "num_questions": 200,
+    "num_shots": 5,
+    "parallel": 64,
+    "max_new_tokens": 512,
+    "data_path": "/dev/shm/q38_gsm8k_test.jsonl"
+  },
+  "server_args": {
+    "served_model_name": "Qwen/Qwen3.8-Flash-Next",
+    "trust_remote_code": true,
+    "watchdog_timeout": 3600,
+    "page_size": 256,
+    "context_length": 135168,
+    "chunked_prefill_size": 8192,
+    "max_prefill_tokens": 8192,
+    "tpu_compile_tokens": [1024, 4096, 8192],
+    "mem_fraction_static": 0.85,
+    "disable_radix_cache": true,
+    "json_model_override_args": "{\"indexer_n_heads\": null, \"text_config\": {\"indexer_n_heads\": null}}"
+  },
+  "runtime_env": {
+    "SGLANG_MAMBA_SSM_DTYPE": "float32",
+    "SGLANG_TPU_VIT_PRECOMPILE_SIZES": "",
+    "TORCH_LOGS": "-dynamo"
+  },
+  "extra_libtpu": [
+    "--xla_tpu_buffer_assignment_enable_fast_merge_fallback=false"
+  ],
+  "workloads": [
+    [1024, 1024, [1, 4, 16, 32, 64]],
+    [4096, 1024, [1, 4, 16, 32, 64]],
+    [65536, 1024, [1, 4, 8]],
+    [131072, 512, [1, 4]]
+  ],
+  "variants": [
+    {
+      "name": "q38_fp8_tp8_ep8",
+      "desc": "FP8 W8A8 (128x128 blockwise runtime scales), TP=8 x EP=8, BF16 KV",
+      "ready_timeout_s": 5400,
+      "server_args": {
+        "tp_size": 8,
+        "ep_size": 8,
+        "quantization": "fp8",
+        "kv_cache_dtype": "bfloat16",
+        "tpu_fp8_runtime": "blockwise",
+        "max_running_requests": 64,
+        "torch_compile_max_bs": 64,
+        "tpu_compile_bs": [1, 4, 8, 16, 32, 64],
+        "max_total_tokens": 1310720,
+        "max_mamba_cache_size": 160
+      },
+      "runtime_env": {
+        "SGLANG_TPU_FP8_MOE_FP32_SCALES": "1"
+      }
+    },
+    {
+      "name": "q38_fp8_tp8_ep8_mtp3",
+      "desc": "FP8 W8A8 (blockwise), TP=8 x EP=8, BF16 KV + MTP speculative decoding (NEXTN, 3 steps, topk 1, 4 draft tokens)",
+      "ready_timeout_s": 5400,
+      "gsm8k": {
+        "num_questions": 200,
+        "num_shots": 5,
+        "parallel": 32,
+        "max_new_tokens": 512,
+        "data_path": "/dev/shm/q38_gsm8k_test.jsonl"
+      },
+      "server_args": {
+        "tp_size": 8,
+        "ep_size": 8,
+        "quantization": "fp8",
+        "kv_cache_dtype": "bfloat16",
+        "tpu_fp8_runtime": "blockwise",
+        "max_running_requests": 32,
+        "torch_compile_max_bs": 32,
+        "tpu_compile_bs": [1, 4, 16, 32],
+        "max_total_tokens": 1048576,
+        "max_mamba_cache_size": 96,
+        "tpu_compile_tracer": "direct",
+        "speculative_algorithm": "NEXTN",
+        "speculative_num_steps": 3,
+        "speculative_eagle_topk": 1,
+        "speculative_num_draft_tokens": 4,
+        "gc_threshold": [50000, 100, 100]
+      },
+      "runtime_env": {
+        "SGLANG_TPU_ENABLE_EXPERIMENTAL_SPEC_WORKER": "1",
+        "SGLANG_SPEC_TP_SYNC": "rng",
+        "SGLANG_RAGGED_VERIFY_MODE": "static",
+        "SGLANG_TPU_ENABLE_NN_MODULE_GUARD_FILTER": "1",
+        "SGLANG_TPU_FP8_MOE_FP32_SCALES": "1"
+      },
+      "workloads": [
+        [1024, 1024, [1, 4, 16, 32]],
+        [4096, 1024, [1, 4, 16, 32]],
+        [65536, 1024, [1]]
+      ]
+    },
+    {
+      "name": "q38_fp8_dp2attn_ep8",
+      "desc": "FP8 W8A8 (blockwise), TP=8 x DP=2 (dp-attention, 2x attn-TP4 + DP LM head) x EP=8, BF16 KV",
+      "ready_timeout_s": 5400,
+      "server_args": {
+        "tp_size": 8,
+        "dp_size": 2,
+        "enable_dp_attention": true,
+        "enable_dp_lm_head": true,
+        "ep_size": 8,
+        "quantization": "fp8",
+        "kv_cache_dtype": "bfloat16",
+        "tpu_fp8_runtime": "blockwise",
+        "max_running_requests": 128,
+        "torch_compile_max_bs": 64,
+        "tpu_compile_bs": [1, 2, 4, 8, 16, 32, 64],
+        "max_total_tokens": 1310720,
+        "max_mamba_cache_size": 320
+      },
+      "runtime_env": {
+        "SGLANG_USE_ATTN_TP_NGRAM": "1",
+        "SGLANG_TPU_FP8_MOE_FP32_SCALES": "1"
+      },
+      "workloads": [
+        [1024, 1024, [1, 4, 16, 32, 64]],
+        [4096, 1024, [1, 16, 64]],
+        [65536, 1024, [1, 4]]
+      ]
+    },
+    {
+      "name": "q38_nvfp4_tp8_ep8",
+      "desc": "NVFP4 experts (RadixArk modelopt_fp4, group_size=16) via Pallas fused-RS MoE, TP=8 x EP=8, BF16 KV",
+      "model_gcs": "gs://YOUR_GCS_BUCKET/models/RadixArk/Qwen3.8-Flash-Next-NVFP4",
+      "ready_timeout_s": 5400,
+      "server_args": {
+        "tp_size": 8,
+        "ep_size": 8,
+        "quantization": "modelopt_fp4",
+        "moe_runner_backend": "pallas_tpu_fused_rs",
+        "kv_cache_dtype": "bfloat16",
+        "max_running_requests": 64,
+        "torch_compile_max_bs": 64,
+        "tpu_compile_bs": [1, 4, 16, 32, 64],
+        "max_total_tokens": 1310720,
+        "max_mamba_cache_size": 160
+      },
+      "extra_libtpu": [
+        "--xla_tpu_enable_sparse_core_collective_offload_all_gather=false"
+      ],
+      "workloads": [
+        [1024, 1024, [1, 4, 16, 32, 64]],
+        [4096, 1024, [1, 4, 16, 32, 64]],
+        [65536, 1024, [1, 4]],
+        [131072, 512, [1]]
+      ]
+    },
+    {
+      "name": "q38_bf16_tp8_ep8",
+      "desc": "BF16 unquantized weights + BF16 KV, TP=8 x EP=8",
+      "model_gcs": "gs://YOUR_GCS_BUCKET/models/Qwen/Qwen3.8-Flash-Next",
+      "ready_timeout_s": 5400,
+      "server_args": {
+        "tp_size": 8,
+        "ep_size": 8,
+        "quantization": "unquant",
+        "kv_cache_dtype": "bfloat16",
+        "max_running_requests": 64,
+        "torch_compile_max_bs": 64,
+        "tpu_compile_bs": [1, 4, 16, 32, 64],
+        "max_total_tokens": 1048576,
+        "max_mamba_cache_size": 160,
+        "mem_fraction_static": 0.90
+      },
+      "workloads": [
+        [1024, 1024, [1, 4, 16, 32, 64]],
+        [4096, 1024, [1, 4, 16, 32, 64]],
+        [65536, 1024, [1, 4]],
+        [131072, 512, [1]]
+      ]
+    },
+    {
+      "name": "q38_bf16_tp8_ep1",
+      "desc": "BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad)",
+      "model_gcs": "gs://YOUR_GCS_BUCKET/models/Qwen/Qwen3.8-Flash-Next",
+      "ready_timeout_s": 5400,
+      "server_args": {
+        "tp_size": 8,
+        "ep_size": 1,
+        "quantization": "unquant",
+        "kv_cache_dtype": "bfloat16",
+        "max_running_requests": 64,
+        "torch_compile_max_bs": 64,
+        "tpu_compile_bs": [1, 4, 16, 32, 64],
+        "max_total_tokens": 786432,
+        "max_mamba_cache_size": 160,
+        "mem_fraction_static": 0.90
+      },
+      "workloads": [
+        [1024, 1024, [1, 4, 16, 32, 64]],
+        [4096, 1024, [1, 16, 64]],
+        [65536, 1024, [1]],
+        [131072, 512, [1]]
+      ]
+    }
+  ]
+}
