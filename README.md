@@ -2,7 +2,7 @@
 
 End-to-end bring-up, runtime patches, quality verification (`GSM8K`), speculative decoding (`MTP` / `NEXTN`), parallelism scaling, multi-precision evaluation (`FP8`, `NVFP4`, `BF16`), and long-context (`64K` & `128K`) serving benchmarks for **`Qwen3.8-Flash-Next`** (`Qwen4ExpForConditionalGeneration`) on a single **Cloud TPU `v7x` host** (`2x2x2` topology, `4` chips = `8` TensorCore ranks, `768 GB` total HBM) running **SGLang-TorchTPU** (`v0.2.0`).
 
-> **Status: Complete single-host TPU `v7x` matrix.** Full raw metrics and per-variant tables are archived in [`results/SUMMARY.md`](./results/SUMMARY.md) and [`results/summary.json`](./results/summary.json).
+> **Status: Active sweep in progress on TPU `v7x` (`2 / 6` variants completed on `4` chips / `8` TensorCores).** Completed benchmark points are populated below and updated as remaining variants finish. Raw incremental outputs: [`results/SUMMARY.md`](./results/SUMMARY.md) · [`results/summary.json`](./results/summary.json).
 
 ## Model & Hardware Overview
 
@@ -18,19 +18,20 @@ End-to-end bring-up, runtime patches, quality verification (`GSM8K`), speculativ
 > [!IMPORTANT]
 > **QSA Sparse Attention Disclosure:** Upstream Qwen Sparse Attention (`QSA`) relies on CUDA-only top-k sparse indexer kernels. All runs set `--json-model-override-args '{"indexer_n_heads": null, "text_config": {"indexer_n_heads": null}}'`, disabling the QSA top-k indexer so the `12` full-attention layers run **exact causal attention up to the `2,048`-token QSA budget** and **full dense causal attention (`Pallas RPA v3`) beyond `2,048` tokens** (`4K`, `64K`, and `128K`).
 
-## TPU Bring-Up: Five Runtime Fixes Required on SGLang-TorchTPU `v0.2.0`
+## TPU Bring-Up: Six Runtime Fixes Required on SGLang-TorchTPU `v0.2.0`
 
-All five patches are applied idempotently at container startup by [`scripts/q38_patches.py`](./scripts/q38_patches.py) and [`scripts/q38_qwen4_exp_tpu_ple.py`](./scripts/q38_qwen4_exp_tpu_ple.py), and verified bit-exact against upstream CPU reference execution via [`scripts/test_q38_ple_equivalence.py`](./scripts/test_q38_ple_equivalence.py):
+All patches are applied idempotently at container startup by [`scripts/q38_patches.py`](./scripts/q38_patches.py) and [`scripts/q38_qwen4_exp_tpu_ple.py`](./scripts/q38_qwen4_exp_tpu_ple.py), and verified bit-exact against upstream CPU reference execution via [`scripts/test_q38_ple_equivalence.py`](./scripts/test_q38_ple_equivalence.py):
 
 1. **Native-Torch `RMSNormGated` Sigmoid Gate (`layernorm_gated.py`):** Qwen3.8 Gated-DeltaNet output normalization uses `rmsnorm(x) * sigmoid(z)`, whereas the TPU native-PyTorch fallback only implemented `silu`/`swish`. Added explicit `sigmoid` gating.
-2. **TorchTPU-Traceable Static-Shape PLE & Exact `int32` Limb N-Gram Hash (`qwen4_exp.py`):**
+2. **TorchTPU-Traceable Static-Shape PLE & Exact `int32` Limb N-Gram Hash (`qwen4_exp.py`, `ple_state_pool.py`):**
    - Replaced `msgspec.Struct` `_PLEBatch` with `typing.NamedTuple` so `torch._dynamo` (`fullgraph=True`) can trace layer-2 PLE without `Unsupported object.__new__` graph breaks.
-   - Eliminated host-side non-padded token slicing so every prompt length executes on static padded token buckets (`1024`, `4096`, `8192`) without triggering runtime recompilations under `fail_on_recompile`.
+   - Eliminated host-side non-padded token slicing so every prompt length executes on static padded token buckets without triggering runtime recompilations under `fail_on_recompile`.
    - Replaced `int64` multiply/XOR/modulo/cumsum n-gram hashing (which aborts the TPU XLA compiler with `Unsupported conversion from vmreg/vreg to U64`) with an **exact `6 x 12`-bit `int32` limb multiplication + nibble-wise Horner modular reduction**, verified across `200,000` random windows with `0` integer mismatches and verified at weight-load time against checkpoint buffers.
-   - Masked fresh requests (`extend_prefix_lens == 0`) to zero short-conv state and `EOS` n-gram history inside the compiled graph, fixing a cross-request state leak because `TpuMambaPool.clear_slots` does not reset PLE side-state pools.
-3. **`NGramPool` `int32` Context Storage (`ple_state_pool.py`):** Stored token-ID n-gram histories (`vocab < 2^18`) as `torch.int32` instead of `torch.int64` so no `s64` PLE state tensors enter the XLA graph.
-4. **MTP (`NEXTN`) `int32` Prefix-Sum Indexing (`qwen4_exp_mtp.py`):** Replaced `torch.cumsum(extend_seq_lens.to(torch.int64), dim=0) - 1` in `Qwen4ExpForCausalLMMTP._set_hc_logits_hidden_states` with an `int32` lower-triangular prefix sum + `clamp(min=0)` to prevent TPU XLA `U64` windowing aborts during draft-extend.
-5. **NVFP4 (`modelopt_fp4`, `group_size=16`) Fused-RS Reduction & Alignment (`modelopt_quant.py`, `qwen2_moe.py`):** Set `TpuModelOptNvFp4FusedMoEMethod.use_flashinfer_trtllm_weight_layout = False`, opted `Qwen2MoeSparseMoeBlock` into `allow_backend_reduction = True` for FP4 configs, and pre-scaled already-TP-summed Pallas fused-RS routed outputs by `1 / tp_size` (`0.125 = 2^-3` for `TP=8`, an exact BF16 exponent decrement with zero rounding loss and zero extra collectives) before adding the unreduced `shared_expert` partial sum so the downstream TP `all_reduce` sums routed and shared experts exactly once.
+   - Stored `NGramPool` histories as `torch.int32`, replaced slice-view `.copy_()` mutations with root-tensor `int32` `index_put_` writes, and masked fresh requests (`extend_prefix_lens == 0`) to zero short-conv state and `EOS` n-gram history inside the compiled graph.
+3. **Whole-Model `DecoderTpuCompilePolicy` & `DP=2` Idle-Extend Guard (`server_args.py`, `qwen4_exp.py`):** Registered `Qwen4ExpForConditionalGeneration` in `LANGUAGE_MODEL_ONLY_ARCHITECTURES`, promoted text-only execution from `Qwen3VLDecoderTpuCompilePolicy` to whole-model `DecoderTpuCompilePolicy` (compiling `LogitsProcessor` + `lm_head` inside XLA), and routed `_prepare_ple_batch` on the active `forward_batch.forward_mode` (with an `out_cache_loc != 0` guard on `flat_extend`) so `DP=2 dp-attention` idle/peer-decode ranks materialized by `prepare_mlp_sync_batch` execute the exact SPMD `EXTEND` graph without mutating slot `0`.
+4. **Partial-RoPE & Hyper-Connection Nested `torch.compile` Fix (`rotary_embedding/base.py`, `mrope.py`, `hyperconnection.py`):** Under `direct_compile` (`make_fx` for MTP `TARGET_VERIFY` and `DRAFT`), nested `torch.compile` wrappers on `apply_rotary_emb` (`partial_rotary_factor=0.25`) and `GatedResidual._mix_compute` / `_combine_compute` (`hc_count=4`) triggered `split_compiler` placeholder materialization failures. Disabled inner `torch.compile` on TPU (so the outer compiler fuses them directly) and pre-cast `cos_sin_cache` to `bfloat16` after weight loading.
+5. **`MTP` (`NEXTN`) `hc_count=4` Hyper-Connection & `direct_compile` PLE Pool Lifting (`qwen4_exp_mtp.py`, `hybrid_linear_direct_compile.py`, `mtp_draft_worker.py`, `hybrid_linear_attn_backend.py`):** Replaced `int64` `cumsum` in `Qwen4ExpForCausalLMMTP` with `int32` prefix-sum indexing; lifted `ShortConvPool` and `NGramPool` buffers as donated inputs in `HybridLinearKVPoolState`; extended `TpuMtpDraftWorker` for `hc_count=4` (`10,240`-dim unmixed carry + `_mix_streams` before `lm_head`); and replaced host-synchronizing `valid.nonzero()` in `_update_ple_state_after_mtp_verify` with static-shape `int32` gather/blend/scatter.
+6. **NVFP4 (`modelopt_fp4`, `group_size=16`) Fused-RS Reduction & JAX `0.11` Migration (`modelopt_quant.py`, `qwen2_moe.py`, `gmm_fused_rs_nodedup.py`):** Set `TpuModelOptNvFp4FusedMoEMethod.use_flashinfer_trtllm_weight_layout = False`, opted `Qwen2MoeSparseMoeBlock` into `allow_backend_reduction = True` for FP4 configs, pre-scaled already-TP-summed Pallas fused-RS routed outputs by `1 / tp_size` (`0.125 = 2^-3` for `TP=8`) before adding the unreduced `shared_expert` partial sum, and migrated removed `pltpu.{semaphore_signal,semaphore_wait,DeviceIdType}` calls in `gmm_fused_rs_nodedup.py` to `pl.*` for JAX `0.11.2`.
 
 ## Precision, KV-Cache & MoE Block-Scale Serving Findings
 
@@ -51,6 +52,7 @@ All five patches are applied idempotently at container startup by [`scripts/q38_
 | Variant | Precision & Parallelism | Harness | Questions | Accuracy | Invalid | GSM8K Output tok/s | Latency (s) | MTP Accept Len |
 |---|---|---|---:|---:|---:|---:|---:|---:|
 | `q38_fp8_tp8_ep8` | FP8 W8A8 (128x128 blockwise runtime scales), TP=8 x EP=8, BF16 KV | raw `/generate` (`stop=["Question"]`) | 200 | **17.0%** | 65.0% | 581.6 | 31.96 | - |
+| `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | chat `/v1/chat/completions` (`enable_thinking=false`) | 200 | **98.5%** | 0.0% | 498.4 | 58.48 | - |
 
 > [!NOTE]
 > On thinking-enabled checkpoints (`Qwen3.8-Flash-Next`), SGLang's legacy raw-completion `few_shot_gsm8k` script passes `stop=["Question"]` without chat templating (`enable_thinking=false`), truncating Chain-of-Thought traces whenever the model echoes the word `Question` (`65.0%` unparsed `invalid` above; among completed answers, `34 / 70` match ground truth before chat templating). Chat-API evaluations (`sglang.test.run_eval --eval-name gsm8k --api chat` with `enable_thinking=false`) are reported in subsequent rows.
@@ -76,6 +78,19 @@ Fixed-length ShareGPT-sampled requests (`--dataset-name random --random-range-ra
 | `q38_fp8_tp8_ep8` | FP8 W8A8 (128x128 blockwise runtime scales), TP=8 x EP=8, BF16 KV | `65536` / `1024` | 8 | 0.136 | **139.2** | 34.8 | 9,050.2 | 17,026 / 30,179 | 40.85 / 53.71 | - | - |
 | `q38_fp8_tp8_ep8` | FP8 W8A8 (128x128 blockwise runtime scales), TP=8 x EP=8, BF16 KV | `131072` / `512` | 1 | 0.048 | **24.5** | 6.1 | 6,294.6 | 8,212 / 8,234 | 24.80 / 24.80 | - | - |
 | `q38_fp8_tp8_ep8` | FP8 W8A8 (128x128 blockwise runtime scales), TP=8 x EP=8, BF16 KV | `131072` / `512` | 4 | 0.086 | **44.2** | 11.0 | 11,348.2 | 20,226 / 32,212 | 51.16 / 74.73 | - | - |
+| `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | `1024` / `1024` | 1 | 0.035 | **35.9** | 9.0 | 71.8 | 179 / 181 | 27.70 / 27.71 | - | - |
+| `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | `1024` / `1024` | 4 | 0.133 | **135.8** | 34.0 | 271.6 | 484 / 595 | 28.96 / 29.33 | - | - |
+| `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | `1024` / `1024` | 16 | 0.465 | **475.7** | 118.9 | 951.5 | 598 / 1,034 | 33.07 / 33.42 | - | - |
+| `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | `1024` / `1024` | 32 | 0.850 | **870.5** | 217.6 | 1,741.0 | 1,191 / 1,907 | 35.63 / 36.33 | - | - |
+| `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | `1024` / `1024` | 64 | 1.166 | **1,194.2** | 298.5 | 2,388.3 | 2,212 / 7,700 | 41.76 / 43.68 | - | - |
+| `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | `4096` / `1024` | 1 | 0.035 | **35.5** | 8.9 | 177.4 | 486 / 490 | 27.72 / 27.74 | - | - |
+| `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | `4096` / `1024` | 4 | 0.130 | **133.0** | 33.2 | 665.0 | 906 / 1,295 | 29.48 / 29.86 | - | - |
+| `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | `4096` / `1024` | 16 | 0.426 | **436.4** | 109.1 | 2,181.8 | 2,217 / 3,982 | 34.74 / 36.33 | - | - |
+| `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | `4096` / `1024` | 32 | 0.732 | **749.1** | 187.3 | 3,745.3 | 3,973 / 7,466 | 38.71 / 42.21 | - | - |
+| `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | `4096` / `1024` | 64 | 0.957 | **979.7** | 244.9 | 4,898.5 | 7,896 / 18,342 | 47.93 / 54.99 | - | - |
+| `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | `65536` / `1024` | 1 | 0.031 | **31.5** | 7.9 | 2,044.5 | 3,813 / 3,818 | 28.08 / 28.09 | - | - |
+| `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | `65536` / `1024` | 4 | 0.087 | **88.9** | 22.2 | 5,779.1 | 9,374 / 14,943 | 35.85 / 41.30 | - | - |
+| `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | `131072` / `512` | 1 | 0.044 | **22.6** | 5.6 | 5,803.6 | 8,108 / 8,114 | 28.46 / 28.47 | - | - |
 
 ## Reproducing the Sweep on GKE (`tpu7x`, `2x2x2` Single Host)
 

@@ -11,18 +11,19 @@
     "num_questions": 200,
     "num_shots": 5,
     "parallel": 64,
-    "max_new_tokens": 512,
+    "max_new_tokens": 1024,
     "data_path": "/dev/shm/q38_gsm8k_test.jsonl"
   },
   "server_args": {
     "served_model_name": "Qwen/Qwen3.8-Flash-Next",
+    "language_model_only": true,
     "trust_remote_code": true,
     "watchdog_timeout": 3600,
     "page_size": 256,
     "context_length": 135168,
     "chunked_prefill_size": 8192,
     "max_prefill_tokens": 8192,
-    "tpu_compile_tokens": [1024, 4096, 8192],
+    "tpu_compile_tokens": [512, 2048, 8192],
     "mem_fraction_static": 0.85,
     "disable_radix_cache": true,
     "json_model_override_args": "{\"indexer_n_heads\": null, \"text_config\": {\"indexer_n_heads\": null}}"
@@ -70,7 +71,7 @@
         "num_questions": 200,
         "num_shots": 5,
         "parallel": 32,
-        "max_new_tokens": 512,
+        "max_new_tokens": 1024,
         "data_path": "/dev/shm/q38_gsm8k_test.jsonl"
       },
       "server_args": {

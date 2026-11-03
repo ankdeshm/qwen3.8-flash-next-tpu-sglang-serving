@@ -112,17 +112,17 @@ SMOKE_PROMPTS = (
 )
 
 
-def smoke_generate(port: int) -> list[dict]:
+def smoke_generate(port: int, is_spec: bool = False) -> list[dict]:
     """Greedy completions for fixed prompts (coherence + NaN-logprob check of the patched model)."""
     out = []
     for prompt in SMOKE_PROMPTS:
-        body = json.dumps(
-            {
-                "text": prompt,
-                "sampling_params": {"temperature": 0, "max_new_tokens": 64},
-                "return_logprob": True,
-            }
-        ).encode()
+        payload: dict = {
+            "text": prompt,
+            "sampling_params": {"temperature": 0, "max_new_tokens": 64},
+        }
+        if not is_spec:
+            payload["return_logprob"] = True
+        body = json.dumps(payload).encode()
         req = urllib.request.Request(
             f"http://127.0.0.1:{port}/generate", data=body, headers={"Content-Type": "application/json"}
         )
@@ -149,27 +149,45 @@ def smoke_generate(port: int) -> list[dict]:
 GSM8K_URL = "https://raw.githubusercontent.com/openai/grade-school-math/master/grade_school_math/data/test.jsonl"
 
 
-def run_gsm8k(port: int, cfg: dict) -> dict:
-    """Few-shot GSM8K accuracy via sglang.test.few_shot_gsm8k (greedy); quality gate for patched variants."""
+def run_gsm8k(port: int, cfg: dict, served_name: str = "Qwen/Qwen3.8-Flash-Next") -> dict:
+    """5-shot greedy GSM8K accuracy via Chat API (sglang.test.run_eval --eval-name gsm8k --api chat)."""
     data = Path(cfg.get("data_path", "/dev/shm/q38_gsm8k_test.jsonl"))
     if not data.exists():
         subprocess.run(["curl", "-sS", "-m", "60", "-o", str(data), GSM8K_URL], check=False)
+    num_q = int(cfg.get("num_questions", 200))
+    num_shots = int(cfg.get("num_shots", 5))
+    parallel = int(cfg.get("parallel", 64))
+    max_toks = int(cfg.get("max_new_tokens", 1024))
+    result_json = Path(f"/tmp/gsm8k_{served_name.replace('/', '_')}.json")
+    result_json.unlink(missing_ok=True)
     cmd = [
         sys.executable,
         "-m",
-        "sglang.test.few_shot_gsm8k",
+        "sglang.test.run_eval",
+        "--eval-name",
+        "gsm8k",
+        "--api",
+        "chat",
+        "--host",
+        "127.0.0.1",
         "--port",
         str(port),
-        "--data-path",
-        str(data),
-        "--num-questions",
-        str(cfg.get("num_questions", 200)),
+        "--model",
+        served_name,
+        "--num-examples",
+        str(num_q),
+        "--num-threads",
+        str(parallel),
         "--num-shots",
-        str(cfg.get("num_shots", 5)),
-        "--parallel",
-        str(cfg.get("parallel", 64)),
-        "--max-new-tokens",
-        str(cfg.get("max_new_tokens", 512)),
+        str(num_shots),
+        "--max-tokens",
+        str(max_toks),
+        "--temperature",
+        "0.0",
+        "--chat-template-kwargs",
+        '{"enable_thinking": false}',
+        "--gsm8k-data-path",
+        str(data),
     ]
     t0 = time.time()
     try:
@@ -177,19 +195,43 @@ def run_gsm8k(port: int, cfg: dict) -> dict:
     except subprocess.TimeoutExpired:
         return {"error": "timeout", "wall_s": round(time.time() - t0, 1)}
     res: dict = {
-        "num_questions": int(cfg.get("num_questions", 200)),
-        "num_shots": int(cfg.get("num_shots", 5)),
-        "parallel": int(cfg.get("parallel", 64)),
+        "harness": "chat `/v1/chat/completions` (`enable_thinking=false`)",
+        "num_questions": num_q,
+        "num_shots": num_shots,
+        "parallel": parallel,
         "return_code": proc.returncode,
         "wall_s": round(time.time() - t0, 1),
     }
+    if result_json.exists():
+        try:
+            jm = json.loads(result_json.read_text())
+            if isinstance(jm.get("score"), (int, float)):
+                res["accuracy"] = round(float(jm["score"]), 4)
+                res["invalid"] = 0.0
+            if isinstance(jm.get("latency"), (int, float)):
+                res["latency"] = round(float(jm["latency"]), 3)
+            if isinstance(jm.get("output_throughput"), (int, float)):
+                res["output_throughput"] = round(float(jm["output_throughput"]), 3)
+        except Exception:
+            pass
     for line in (proc.stdout + "\n" + proc.stderr).splitlines():
-        for key in ("Accuracy", "Invalid", "Latency", "Output throughput"):
-            if line.strip().startswith(key + ":"):
-                try:
-                    res[key.lower().replace(" ", "_")] = float(line.split(":", 1)[1].split()[0])
-                except ValueError:
-                    res[key.lower().replace(" ", "_")] = line.split(":", 1)[1].strip()
+        sline = line.strip()
+        if sline.startswith("Score:") and "accuracy" not in res:
+            try:
+                res["accuracy"] = float(sline.split(":", 1)[1].split()[0])
+                res["invalid"] = 0.0
+            except ValueError:
+                pass
+        elif sline.startswith("Total latency:") and "latency" not in res:
+            try:
+                res["latency"] = float(sline.split(":", 1)[1].split()[0])
+            except ValueError:
+                pass
+        elif sline.startswith("Output throughput:") and "output_throughput" not in res:
+            try:
+                res["output_throughput"] = float(sline.split(":", 1)[1].split()[0])
+            except ValueError:
+                pass
     acc_len = fetch_spec_accept_length(port)
     if acc_len is not None:
         res["spec_accept_length"] = round(acc_len, 3)
@@ -209,7 +251,7 @@ def stop_server(proc: subprocess.Popen) -> None:
             except Exception:
                 pass
     subprocess.run(
-        ["pkill", "-9", "-f", r"benchmark\.tpu\.launch_server|sglang\.launch_server|sglang\.srt|sglang::"],
+        ["pkill", "-9", "-f", r"[b]enchmark\.tpu\.launch_server|[s]glang\.launch_server|[s]glang\.srt|[s]glang::"],
         check=False,
     )
     time.sleep(30)
@@ -556,7 +598,7 @@ def main() -> int:
                     write_summary(out_dir, meta, results, mirror_dir, gcs_uri)
                     continue
                 log(f"[{var['name']}] ready after {rec['server_ready_s']}s")
-                rec["smoke"] = smoke_generate(port)
+                rec["smoke"] = smoke_generate(port, is_spec=bool(server_args.get("speculative_algorithm")))
                 log(f"[{var['name']}] smoke: {json.dumps(rec['smoke'])[:600]}")
                 rec["status"] = "RUNNING"
                 write_summary(out_dir, meta, results, mirror_dir, gcs_uri)
@@ -564,7 +606,9 @@ def main() -> int:
                 gsm_cfg = var.get("gsm8k", plan.get("gsm8k"))
                 if gsm_cfg:
                     log(f"[{var['name']}] running GSM8K ({gsm_cfg.get('num_questions', 200)} questions)...")
-                    rec["gsm8k"] = run_gsm8k(port, gsm_cfg)
+                    rec["gsm8k"] = run_gsm8k(
+                        port, gsm_cfg, served_name=server_args.get("served_model_name", "Qwen/Qwen3.8-Flash-Next")
+                    )
                     log(f"[{var['name']}] gsm8k: {json.dumps(rec['gsm8k'])[:500]}")
                     write_summary(out_dir, meta, results, mirror_dir, gcs_uri)
 

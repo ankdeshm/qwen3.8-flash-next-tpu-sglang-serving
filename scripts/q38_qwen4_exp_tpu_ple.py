@@ -92,7 +92,11 @@ def _prepare_ple_batch(  # noqa: F811
     ):
         raise NotImplementedError("Qwen4 PLE speculative decoding supports only topk=1")
 
-    mode = _get_ple_forward_mode(forward_batch)
+    # On TPU (especially DP>1 dp-attention), prepare_mlp_sync_batch materializes idle or
+    # peer-decode ranks into the peer's active forward_batch.forward_mode (e.g., EXTEND with
+    # padded input_ids [T] and req_pool_indices [B]) while recording _original_forward_mode=DECODE.
+    # Every SPMD/DP rank must trace the active forward_batch.forward_mode, never _original_forward_mode.
+    mode = forward_batch.forward_mode
     if mode.is_idle():
         return None
     if input_ids.dim() > 1:
@@ -169,8 +173,8 @@ def _prepare_ple_batch(  # noqa: F811
     state_indices = pool.get_mamba_indices(
         forward_batch.req_pool_indices[:sequence_count]
     ).to(_Q38_I32)
-    # Padded sequences use request slot 0, which may belong to a real request:
-    # route them to the state pools' reserved dummy slot 0.
+    # Padded or DP-idle dummy sequences use request slot 0 / out_cache_loc 0, which may
+    # belong to a real request: route them to the state pools' reserved dummy slot 0.
     out_cache_loc = forward_batch.out_cache_loc
     valid = lengths.ne(0)
     if out_cache_loc is not None and mode.is_decode():
@@ -179,6 +183,9 @@ def _prepare_ple_batch(  # noqa: F811
         valid = valid & out_cache_loc[:physical_tokens].reshape(
             sequence_count, row_width
         ).ne(0).any(dim=1)
+    elif out_cache_loc is not None and flat_extend and physical_tokens > 0:
+        first_tok = seq_starts.clamp(min=0, max=physical_tokens - 1)
+        valid = valid & out_cache_loc.index_select(0, first_tok).ne(0)
     state_indices = torch.where(valid, state_indices, torch.zeros_like(state_indices))
 
     ngram_context = None
@@ -488,10 +495,110 @@ def _q38_load_weights(self, weights, *args, **kwargs):
                     torch.tensor(module._q38_head_offsets[start:end], dtype=_Q38_I32, device=target_dev),
                     persistent=False,
                 )
+    # Pre-cast RotaryEmbedding cos_sin_cache to bfloat16 before compilation so
+    # _match_cos_sin_cache_dtype is a pure no-op inside direct_compile traces.
+    for module in self.modules():
+        csc = getattr(module, "cos_sin_cache", None)
+        if isinstance(csc, torch.Tensor) and csc.device.type != "meta" and csc.dtype != torch.bfloat16:
+            module.cos_sin_cache = csc.to(device=csc.device, dtype=torch.bfloat16)
+    embed_tok = getattr(self.model, "embed_tokens", None)
+    if embed_tok is not None and hasattr(embed_tok, "lift_rank_to_input"):
+        w = getattr(embed_tok, "weight", None)
+        if isinstance(w, torch.Tensor) and w.device.type != "meta":
+            embed_tok.lift_rank_to_input()
     return result
 
 
 Qwen4ExpForConditionalGeneration.load_weights = _q38_load_weights
+Qwen4ExpForConditionalGeneration.decode_embeds_in_language_model = True
+
+from sglang.srt.compilation.support_torch_compile import (  # noqa: E402
+    _COMPILE_POLICY_ATTR as _Q38_COMPILE_POLICY_ATTR,
+)
+
+_q38_orig_cg_init = Qwen4ExpForConditionalGeneration.__init__
+
+
+def _q38_cg_init(self, *args, **kwargs):
+    _q38_orig_cg_init(self, *args, **kwargs)
+    if getattr(self, "language_model_only", False):
+        # Detach Qwen3VLDecoderTpuCompilePolicy from self.model so TpuGraphRunner
+        # installs whole-model DecoderTpuCompilePolicy on Qwen4ExpForConditionalGeneration.forward
+        # (compiles LogitsProcessor + lm_head in-graph; enables DP-attention & MTP direct_compile).
+        setattr(self.model, _Q38_COMPILE_POLICY_ATTR, None)
+
+
+Qwen4ExpForConditionalGeneration.__init__ = _q38_cg_init
+
+_q38_orig_cg_forward = Qwen4ExpForConditionalGeneration.forward
+
+
+@torch.no_grad()
+def _q38_cg_forward(
+    self,
+    input_ids: torch.Tensor,
+    positions: torch.Tensor,
+    forward_batch: ForwardBatch,
+    get_embedding: bool = False,
+    pp_proxy_tensors: Optional[PPProxyTensors] = None,
+):
+    if getattr(self, "language_model_only", False) and not get_embedding:
+        if input_ids is None:
+            input_ids = forward_batch.input_ids
+        model_output = Qwen4ExpModel.forward(
+            self.model,
+            input_ids=input_ids,
+            positions=positions,
+            forward_batch=forward_batch,
+            inputs_embeds=None,
+            pp_proxy_tensors=pp_proxy_tensors,
+        )
+        if isinstance(model_output, PPProxyTensors):
+            return model_output
+        hc_hidden_states = None
+        if isinstance(model_output, tuple):
+            hidden_states, hc_hidden_states = model_output
+        else:
+            hidden_states = model_output
+        output = self.logits_processor(
+            input_ids,
+            hidden_states,
+            self.lm_head,
+            forward_batch,
+            hidden_states_before_norm=hc_hidden_states,
+        )
+        if (
+            hc_hidden_states is not None
+            and getattr(output, "hidden_states", None) is not None
+            and output.hidden_states.shape[-1] != hc_hidden_states.shape[-1]
+        ):
+            output.hidden_states = hc_hidden_states
+        return output
+    return _q38_orig_cg_forward(
+        self,
+        input_ids=input_ids,
+        positions=positions,
+        forward_batch=forward_batch,
+        get_embedding=get_embedding,
+        pp_proxy_tensors=pp_proxy_tensors,
+    )
+
+
+Qwen4ExpForConditionalGeneration.forward = _q38_cg_forward
+
+
+def _q38_short_conv_set(pool, layer_id: int, indices: torch.Tensor, val: torch.Tensor) -> None:
+    sc_pool = getattr(pool, "short_conv_pool", None)
+    if (
+        sc_pool is not None
+        and getattr(sc_pool, "conv_state", None) is not None
+        and layer_id in getattr(sc_pool, "layer_map", {})
+    ):
+        lidx = sc_pool.layer_map[layer_id]
+        sc_pool.conv_state[lidx, indices.to(_Q38_I32)] = val.to(dtype=sc_pool.conv_state.dtype)
+        return
+    conv_state = pool.short_conv_layer_cache(layer_id)
+    conv_state[indices.to(_Q38_I32)] = val.to(dtype=conv_state.dtype)
 
 
 def _q38_short_conv(
@@ -503,7 +610,15 @@ def _q38_short_conv(
     if x.shape[0] == 0:
         return x
     pool = get_req_to_token_pool()
-    conv_state = pool.short_conv_layer_cache(self.layer_id)  # [slots, C, S]
+    sc_pool = getattr(pool, "short_conv_pool", None)
+    if (
+        sc_pool is not None
+        and getattr(sc_pool, "conv_state", None) is not None
+        and self.layer_id in getattr(sc_pool, "layer_map", {})
+    ):
+        conv_state = sc_pool.conv_state[sc_pool.layer_map[self.layer_id]]
+    else:
+        conv_state = pool.short_conv_layer_cache(self.layer_id)  # [slots, C, S]
     state_len = self.short_conv_state_len
     dilation = self.short_conv_dilation
     kernel = self.conv_kernel_size
@@ -517,11 +632,11 @@ def _q38_short_conv(
         for k in range(1, kernel):
             acc = acc + conv_input[:, :, k * dilation].to(torch.float32) * weight[:, k]
         next_state = conv_input[:, :, 1:]
-        conv_state[batch.state_indices] = next_state.to(dtype=conv_state.dtype)
+        _q38_short_conv_set(pool, self.layer_id, batch.state_indices, next_state)
         track = _ple_track_targets(forward_batch, batch)
         if track is not None:
             track_indices, _ = track
-            conv_state[track_indices.to(_Q38_I32)] = next_state.to(dtype=conv_state.dtype)
+            _q38_short_conv_set(pool, self.layer_id, track_indices, next_state)
         return F.silu(acc).to(x.dtype)
 
     if batch.flat_extend:
@@ -560,11 +675,11 @@ def _q38_short_conv(
             window = torch.where((ext < state_len).unsqueeze(-1), from_state, from_x)
             return window.transpose(1, 2).to(dtype=conv_state.dtype)  # [B, C, S]
 
-        conv_state[batch.state_indices] = _state_at(batch.lengths)
+        _q38_short_conv_set(pool, self.layer_id, batch.state_indices, _state_at(batch.lengths))
         track = _ple_track_targets(forward_batch, batch)
         if track is not None:
             track_indices, track_offsets = track
-            conv_state[track_indices.to(_Q38_I32)] = _state_at(track_offsets)
+            _q38_short_conv_set(pool, self.layer_id, track_indices, _state_at(track_offsets))
         return F.silu(acc).to(x.dtype)
 
     # target verify: fixed width W, no committed-state write (accepted steps are
@@ -579,8 +694,24 @@ def _q38_short_conv(
         term = term * weight[:, k].view(1, -1, 1)
         acc = term if acc is None else acc + term
     conv_output = acc.transpose(1, 2).reshape(seq_count * width, channels)
-    intermediate_cache = pool.short_conv_layer_intermediate_cache(self.layer_id)
-    if intermediate_cache is not None:
+    dst_indices_raw = select_verify_intermediate_state_indices(
+        None,
+        forward_batch.req_pool_indices,
+        batch.lengths.ne(0),
+        pool.size,
+    )
+    dst_rows = (
+        torch.arange(seq_count, device=x.device, dtype=_Q38_I32)
+        if dst_indices_raw is None
+        else dst_indices_raw.to(_Q38_I32)
+    )
+    if (
+        sc_pool is not None
+        and getattr(sc_pool, "intermediate_conv_state", None) is not None
+        and self.layer_id in getattr(sc_pool, "layer_map", {})
+    ):
+        ic = sc_pool.intermediate_conv_state
+        lidx = sc_pool.layer_map[self.layer_id]
         if state_len:
             intermediate_state = torch.stack(
                 [conv_input[:, :, t : t + state_len] for t in range(1, width + 1)],
@@ -591,17 +722,31 @@ def _q38_short_conv(
         valid_steps = batch.valid_tokens.reshape(seq_count, width, 1, 1)
         intermediate_state = torch.where(
             valid_steps, intermediate_state, torch.zeros_like(intermediate_state)
-        ).to(dtype=intermediate_cache.dtype)
-        dst_indices_raw = select_verify_intermediate_state_indices(
-            None,
-            forward_batch.req_pool_indices,
-            batch.lengths.ne(0),
-            pool.size,
-        )
-        if dst_indices_raw is None:
-            intermediate_cache[:seq_count, :width].copy_(intermediate_state)
+        ).to(dtype=ic.dtype)
+        if width == ic.shape[2]:
+            ic[lidx, dst_rows] = intermediate_state
         else:
-            intermediate_cache[dst_indices_raw.to(_Q38_I32), :width] = intermediate_state
+            wcols = torch.arange(width, device=x.device, dtype=_Q38_I32)
+            ic[lidx, dst_rows.unsqueeze(1), wcols.unsqueeze(0)] = intermediate_state
+    else:
+        intermediate_cache = pool.short_conv_layer_intermediate_cache(self.layer_id)
+        if intermediate_cache is not None:
+            if state_len:
+                intermediate_state = torch.stack(
+                    [conv_input[:, :, t : t + state_len] for t in range(1, width + 1)],
+                    dim=1,
+                )  # [B, W, C, S]
+            else:
+                intermediate_state = x.new_empty((seq_count, width, channels, 0))
+            valid_steps = batch.valid_tokens.reshape(seq_count, width, 1, 1)
+            intermediate_state = torch.where(
+                valid_steps, intermediate_state, torch.zeros_like(intermediate_state)
+            ).to(dtype=intermediate_cache.dtype)
+            if width == intermediate_cache.shape[1]:
+                intermediate_cache[dst_rows] = intermediate_state
+            else:
+                wcols = torch.arange(width, device=x.device, dtype=_Q38_I32)
+                intermediate_cache[dst_rows.unsqueeze(1), wcols.unsqueeze(0)] = intermediate_state
     return F.silu(conv_output).to(x.dtype)
 
 
