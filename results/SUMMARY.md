@@ -1,6 +1,6 @@
 # Qwen3.8-Flash-Next (Qwen4ExpForConditionalGeneration: 48 layers = 36 Gated-DeltaNet + 12 full attention, 512 experts top-10, hyper-connections x4, per-layer n-gram embedding, MTP head) on One TPU v7x Host (4 Chips / 8 TensorCores) with SGLang-TorchTPU v0.2.0
 
-- **Updated (UTC):** `2026-11-03T11:50:17.389128+00:00`
+- **Updated (UTC):** `2026-11-03T12:34:59.582775+00:00`
 - **Hardware:** one TPU `v7x` host (`4` chips = `8` TensorCore ranks, `768 GB` HBM), engine `SGLang-TorchTPU` (`sglang-torchtpu-diffusion:v0.2.0`), single-host mode (`FORCE_SINGLE_HOST=1`).
 - **Checkpoints:** `Qwen/Qwen3.8-Flash-Next-FP8, Qwen/Qwen3.8-Flash-Next (BF16), RadixArk/Qwen3.8-Flash-Next-NVFP4`.
 - **QSA Disclosure:** `indexer_n_heads: null` disables the sparse QSA top-k indexer so the 12 full-attention layers execute exact causal attention up to the 2,048-token QSA budget and full dense causal attention beyond 2,048 tokens (`4K`, `64K`, `128K`).
@@ -12,6 +12,7 @@
 |---|---|---:|---:|---:|---:|---:|---:|
 | `q38_fp8_tp8_ep8` | FP8 W8A8 (128x128 blockwise runtime scales), TP=8 x EP=8, BF16 KV | 200 (5-shot) | **17.0%** | 65.0% | 581.6 | 31.96 | - |
 | `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | 200 (5-shot) | **98.5%** | 0.0% | 498.4 | 58.48 | - |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | 200 (5-shot) | **98.5%** | 0.0% | 409.9 | 71.04 | - |
 
 ## Serving Throughput, Latency & Long-Context Matrix
 
@@ -45,3 +46,13 @@
 | `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | `65536` / `1024` | 1 | 0.031 | 31.5 | 7.9 | 2,044.5 | 3,813 / 3,818 | 28.08 / 28.09 | - | - | `PASS` |
 | `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | `65536` / `1024` | 4 | 0.087 | 88.9 | 22.2 | 5,779.1 | 9,374 / 14,943 | 35.85 / 41.30 | - | - | `PASS` |
 | `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | `131072` / `512` | 1 | 0.044 | 22.6 | 5.6 | 5,803.6 | 8,108 / 8,114 | 28.46 / 28.47 | - | - | `PASS` |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `1024` / `1024` | 1 | 0.034 | 34.9 | 8.7 | 69.8 | 237 / 240 | 28.46 / 28.46 | - | - | `PASS` |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `1024` / `1024` | 4 | 0.128 | 131.1 | 32.8 | 262.3 | 694 / 865 | 29.79 / 30.35 | - | - | `PASS` |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `1024` / `1024` | 16 | 0.408 | 417.5 | 104.4 | 834.9 | 875 / 1,522 | 37.37 / 38.09 | - | - | `PASS` |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `1024` / `1024` | 32 | 0.692 | 709.1 | 177.3 | 1,418.2 | 1,759 / 2,820 | 43.45 / 44.53 | - | - | `PASS` |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `1024` / `1024` | 64 | 0.925 | 946.7 | 236.7 | 1,893.5 | 3,290 / 10,332 | 54.68 / 57.21 | - | - | `PASS` |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `4096` / `1024` | 1 | 0.034 | 34.3 | 8.6 | 171.6 | 686 / 689 | 28.49 / 28.49 | - | - | `PASS` |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `4096` / `1024` | 16 | 0.365 | 373.8 | 93.5 | 1,869.2 | 3,274 / 5,890 | 40.02 / 42.27 | - | - | `PASS` |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `4096` / `1024` | 64 | 0.740 | 758.2 | 189.6 | 3,791.0 | 11,749 / 26,506 | 63.05 / 73.85 | - | - | `PASS` |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `65536` / `1024` | 1 | 0.029 | 29.2 | 7.3 | 1,899.8 | 5,510 / 5,534 | 28.84 / 28.84 | - | - | `PASS` |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `131072` / `512` | 1 | 0.038 | 19.3 | 4.8 | 4,965.3 | 11,547 / 11,634 | 29.22 / 29.22 | - | - | `PASS` |

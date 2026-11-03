@@ -2,7 +2,7 @@
 
 End-to-end bring-up, runtime patches, quality verification (`GSM8K`), speculative decoding (`MTP` / `NEXTN`), parallelism scaling, multi-precision evaluation (`FP8`, `NVFP4`, `BF16`), and long-context (`64K` & `128K`) serving benchmarks for **`Qwen3.8-Flash-Next`** (`Qwen4ExpForConditionalGeneration`) on a single **Cloud TPU `v7x` host** (`2x2x2` topology, `4` chips = `8` TensorCore ranks, `768 GB` total HBM) running **SGLang-TorchTPU** (`v0.2.0`).
 
-> **Status: Active sweep in progress on TPU `v7x` (`2 / 6` variants completed on `4` chips / `8` TensorCores).** Completed benchmark points are populated below and updated as remaining variants finish. Raw incremental outputs: [`results/SUMMARY.md`](./results/SUMMARY.md) · [`results/summary.json`](./results/summary.json).
+> **Status: Active sweep in progress on TPU `v7x` (`3 / 6` variants completed on `4` chips / `8` TensorCores).** Completed benchmark points are populated below and updated as remaining variants finish. Raw incremental outputs: [`results/SUMMARY.md`](./results/SUMMARY.md) · [`results/summary.json`](./results/summary.json).
 
 ## Model & Hardware Overview
 
@@ -53,6 +53,7 @@ All patches are applied idempotently at container startup by [`scripts/q38_patch
 |---|---|---|---:|---:|---:|---:|---:|---:|
 | `q38_fp8_tp8_ep8` | FP8 W8A8 (128x128 blockwise runtime scales), TP=8 x EP=8, BF16 KV | raw `/generate` (`stop=["Question"]`) | 200 | **17.0%** | 65.0% | 581.6 | 31.96 | - |
 | `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | chat `/v1/chat/completions` (`enable_thinking=false`) | 200 | **98.5%** | 0.0% | 498.4 | 58.48 | - |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | chat `/v1/chat/completions` (`enable_thinking=false`) | 200 | **98.5%** | 0.0% | 409.9 | 71.04 | - |
 
 > [!NOTE]
 > On thinking-enabled checkpoints (`Qwen3.8-Flash-Next`), SGLang's legacy raw-completion `few_shot_gsm8k` script passes `stop=["Question"]` without chat templating (`enable_thinking=false`), truncating Chain-of-Thought traces whenever the model echoes the word `Question` (`65.0%` unparsed `invalid` above; among completed answers, `34 / 70` match ground truth before chat templating). Chat-API evaluations (`sglang.test.run_eval --eval-name gsm8k --api chat` with `enable_thinking=false`) are reported in subsequent rows.
@@ -91,6 +92,16 @@ Fixed-length ShareGPT-sampled requests (`--dataset-name random --random-range-ra
 | `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | `65536` / `1024` | 1 | 0.031 | **31.5** | 7.9 | 2,044.5 | 3,813 / 3,818 | 28.08 / 28.09 | - | - |
 | `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | `65536` / `1024` | 4 | 0.087 | **88.9** | 22.2 | 5,779.1 | 9,374 / 14,943 | 35.85 / 41.30 | - | - |
 | `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | `131072` / `512` | 1 | 0.044 | **22.6** | 5.6 | 5,803.6 | 8,108 / 8,114 | 28.46 / 28.47 | - | - |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `1024` / `1024` | 1 | 0.034 | **34.9** | 8.7 | 69.8 | 237 / 240 | 28.46 / 28.46 | - | - |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `1024` / `1024` | 4 | 0.128 | **131.1** | 32.8 | 262.3 | 694 / 865 | 29.79 / 30.35 | - | - |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `1024` / `1024` | 16 | 0.408 | **417.5** | 104.4 | 834.9 | 875 / 1,522 | 37.37 / 38.09 | - | - |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `1024` / `1024` | 32 | 0.692 | **709.1** | 177.3 | 1,418.2 | 1,759 / 2,820 | 43.45 / 44.53 | - | - |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `1024` / `1024` | 64 | 0.925 | **946.7** | 236.7 | 1,893.5 | 3,290 / 10,332 | 54.68 / 57.21 | - | - |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `4096` / `1024` | 1 | 0.034 | **34.3** | 8.6 | 171.6 | 686 / 689 | 28.49 / 28.49 | - | - |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `4096` / `1024` | 16 | 0.365 | **373.8** | 93.5 | 1,869.2 | 3,274 / 5,890 | 40.02 / 42.27 | - | - |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `4096` / `1024` | 64 | 0.740 | **758.2** | 189.6 | 3,791.0 | 11,749 / 26,506 | 63.05 / 73.85 | - | - |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `65536` / `1024` | 1 | 0.029 | **29.2** | 7.3 | 1,899.8 | 5,510 / 5,534 | 28.84 / 28.84 | - | - |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `131072` / `512` | 1 | 0.038 | **19.3** | 4.8 | 4,965.3 | 11,547 / 11,634 | 29.22 / 29.22 | - | - |
 
 ## Reproducing the Sweep on GKE (`tpu7x`, `2x2x2` Single Host)
 
