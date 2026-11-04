@@ -359,7 +359,7 @@ def _patch_qwen4_mtp_and_tpu_spec() -> str:
                     "    return HybridLinearKVPoolState(full_kv_pool=full_kv_pool, mamba_pool=mamba_pool)"
                 )
                 new_cls = (
-                    f"{DIRECT_PLE_MARKER}\n"
+                    f"{DIRECT_PLE_MARKER} v2\n"
                     "class HybridLinearKVPoolState:\n"
                     '    """KVPool over full-attention KV buffers, linear-attention state, and optional PLE side-state pools."""\n\n'
                     "    def __init__(\n"
@@ -367,15 +367,20 @@ def _patch_qwen4_mtp_and_tpu_spec() -> str:
                     "        *,\n"
                     "        full_kv_pool: MHATokenToKVPool,\n"
                     "        mamba_pool: TpuMambaPool,\n"
+                    "        req_to_token_pool: Any = None,\n"
                     "        short_conv_pool: Any = None,\n"
                     "        ngram_pool: Any = None,\n"
                     "    ) -> None:\n"
                     "        self._full_kv_pool = full_kv_pool\n"
                     "        self._mamba_pool = mamba_pool\n"
+                    "        self._req_to_token_pool = req_to_token_pool\n"
                     "        self._short_conv_pool = short_conv_pool\n"
                     "        self._ngram_pool = ngram_pool\n\n"
                     "    def _extra_slots(self) -> list[tuple[Any, str]]:\n"
                     "        slots: list[tuple[Any, str]] = []\n"
+                    "        if self._req_to_token_pool is not None:\n"
+                    '            if getattr(self._req_to_token_pool, "req_index_to_mamba_index_mapping", None) is not None:\n'
+                    '                slots.append((self._req_to_token_pool, "req_index_to_mamba_index_mapping"))\n'
                     "        if self._short_conv_pool is not None:\n"
                     '            for attr in ("conv_state", "intermediate_conv_state"):\n'
                     "                if getattr(self._short_conv_pool, attr, None) is not None:\n"
@@ -407,12 +412,76 @@ def _patch_qwen4_mtp_and_tpu_spec() -> str:
                     "    return HybridLinearKVPoolState(\n"
                     "        full_kv_pool=full_kv_pool,\n"
                     "        mamba_pool=mamba_pool,\n"
+                    "        req_to_token_pool=req_to_token_pool,\n"
                     '        short_conv_pool=getattr(req_to_token_pool, "short_conv_pool", None),\n'
                     '        ngram_pool=getattr(req_to_token_pool, "ngram_pool", None),\n'
                     "    )"
                 )
                 assert hsrc.count(old_cls) == 1, f"unexpected {hldc_py} layout"
                 hldc_py.write_text(hsrc.replace(old_cls, new_cls, 1))
+            elif f"{DIRECT_PLE_MARKER} v2" not in hsrc:
+                idx = hsrc.index(DIRECT_PLE_MARKER)
+                end_idx = hsrc.index("\n\ndef has_linear_attention", idx)
+                new_v2 = (
+                    f"{DIRECT_PLE_MARKER} v2\n"
+                    "class HybridLinearKVPoolState:\n"
+                    '    """KVPool over full-attention KV buffers, linear-attention state, and optional PLE side-state pools."""\n\n'
+                    "    def __init__(\n"
+                    "        self,\n"
+                    "        *,\n"
+                    "        full_kv_pool: MHATokenToKVPool,\n"
+                    "        mamba_pool: TpuMambaPool,\n"
+                    "        req_to_token_pool: Any = None,\n"
+                    "        short_conv_pool: Any = None,\n"
+                    "        ngram_pool: Any = None,\n"
+                    "    ) -> None:\n"
+                    "        self._full_kv_pool = full_kv_pool\n"
+                    "        self._mamba_pool = mamba_pool\n"
+                    "        self._req_to_token_pool = req_to_token_pool\n"
+                    "        self._short_conv_pool = short_conv_pool\n"
+                    "        self._ngram_pool = ngram_pool\n\n"
+                    "    def _extra_slots(self) -> list[tuple[Any, str]]:\n"
+                    "        slots: list[tuple[Any, str]] = []\n"
+                    "        if self._req_to_token_pool is not None:\n"
+                    '            if getattr(self._req_to_token_pool, "req_index_to_mamba_index_mapping", None) is not None:\n'
+                    '                slots.append((self._req_to_token_pool, "req_index_to_mamba_index_mapping"))\n'
+                    "        if self._short_conv_pool is not None:\n"
+                    '            for attr in ("conv_state", "intermediate_conv_state"):\n'
+                    "                if getattr(self._short_conv_pool, attr, None) is not None:\n"
+                    "                    slots.append((self._short_conv_pool, attr))\n"
+                    "        if self._ngram_pool is not None:\n"
+                    '            for attr in ("context", "intermediate_context"):\n'
+                    "                if getattr(self._ngram_pool, attr, None) is not None:\n"
+                    "                    slots.append((self._ngram_pool, attr))\n"
+                    "        return slots\n\n"
+                    "    def get_state(self) -> list[torch.Tensor]:\n"
+                    "        extra = [getattr(obj, attr) for obj, attr in self._extra_slots()]\n"
+                    "        return [*self._full_kv_pool.get_state(), *self._mamba_pool.get_state(), *extra]\n\n"
+                    "    def set_state(self, state: list[torch.Tensor]) -> None:\n"
+                    "        num_full = len(self._full_kv_pool.get_state())\n"
+                    "        num_mamba = len(self._mamba_pool.get_state())\n"
+                    "        self._full_kv_pool.set_state(state[:num_full])\n"
+                    "        self._mamba_pool.set_state(state[num_full : num_full + num_mamba])\n"
+                    "        for (obj, attr), tensor in zip(self._extra_slots(), state[num_full + num_mamba :], strict=True):\n"
+                    "            setattr(obj, attr, tensor)\n\n\n"
+                    "def hybrid_linear_kv_pool_state(\n"
+                    "    *, kv_pool: HybridLinearKVPool, req_to_token_pool: ReqToTokenPool\n"
+                    ") -> HybridLinearKVPoolState:\n"
+                    "    # The GDN layers read state through the request pool, so lift that one.\n"
+                    "    assert isinstance(req_to_token_pool, HybridReqToTokenPool)\n"
+                    "    mamba_pool = req_to_token_pool.mamba_pool\n"
+                    "    assert isinstance(mamba_pool, TpuMambaPool), type(mamba_pool)\n"
+                    "    full_kv_pool = kv_pool.full_kv_pool\n"
+                    "    assert isinstance(full_kv_pool, MHATokenToKVPool), type(full_kv_pool)\n"
+                    "    return HybridLinearKVPoolState(\n"
+                    "        full_kv_pool=full_kv_pool,\n"
+                    "        mamba_pool=mamba_pool,\n"
+                    "        req_to_token_pool=req_to_token_pool,\n"
+                    '        short_conv_pool=getattr(req_to_token_pool, "short_conv_pool", None),\n'
+                    '        ngram_pool=getattr(req_to_token_pool, "ngram_pool", None),\n'
+                    "    )"
+                )
+                hldc_py.write_text(hsrc[:idx] + new_v2 + hsrc[end_idx:])
 
         mtp_dw_py = tpu_root / "experimental/speculative/mtp/mtp_draft_worker.py"
         if mtp_dw_py.exists():

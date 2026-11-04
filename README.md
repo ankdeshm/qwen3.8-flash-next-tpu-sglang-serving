@@ -2,7 +2,7 @@
 
 End-to-end bring-up, runtime patches, quality verification (`GSM8K`), speculative decoding (`MTP` / `NEXTN`), parallelism scaling, multi-precision evaluation (`FP8`, `NVFP4`, `BF16`), and long-context (`64K` & `128K`) serving benchmarks for **`Qwen3.8-Flash-Next`** (`Qwen4ExpForConditionalGeneration`) on a single **Cloud TPU `v7x` host** (`2x2x2` topology, `4` chips = `8` TensorCore ranks, `768 GB` total HBM) running **SGLang-TorchTPU** (`v0.2.0`).
 
-> **Status: Active sweep in progress on TPU `v7x` (`3 / 6` variants completed on `4` chips / `8` TensorCores).** Completed benchmark points are populated below and updated as remaining variants finish. Raw incremental outputs: [`results/SUMMARY.md`](./results/SUMMARY.md) · [`results/summary.json`](./results/summary.json).
+> **Status: Active sweep in progress on TPU `v7x` (`4 / 6` variants completed on `4` chips / `8` TensorCores).** Completed benchmark points are populated below and updated as remaining variants finish. Raw incremental outputs: [`results/SUMMARY.md`](./results/SUMMARY.md) · [`results/summary.json`](./results/summary.json).
 
 ## Model & Hardware Overview
 
@@ -39,11 +39,14 @@ All patches are applied idempotently at container startup by [`scripts/q38_patch
 - **`blockwise` vs `channelwise` TPU FP8 Runtime (`--tpu-fp8-runtime=blockwise`):** Collapsing `[128, 128]` block-FP8 weights into `channelwise` runtime scales triggers `NaN` logits on `EXTEND` batches at `bs=64` under `torch.compile`. Preserving native `128x128` blockwise FP8 scales (`--tpu-fp8-runtime=blockwise` + `SGLANG_TPU_FP8_MOE_FP32_SCALES=1`) matches eager logprobs to 4 decimal places (`0` `NaN`s across `GSM8K` and `bs=64` concurrency).
 - **`TP=8 x EP=1` MoE Block-Alignment (`moe_intermediate_size=640`):** Splitting `640` intermediate channels across `TP=8` (`EP=1`) yields `80` channels/rank (`80 % 128 != 0`), which `[128, 128]` block-FP8 scales cannot partition across `128`-row scale blocks and `NVFP4` pads `6.4x` (`80 -> 512`). Unquantized `BF16` (`q38_bf16_tp8_ep1`) natively zero-pads `80 -> 128` lanes (`1.6x`) for Pallas `gmm_v2`, enabling clean single-host `TP=8 x EP=1` vs `TP=8 x EP=8` comparison.
 
-## Key Single-Host TPU `v7x` Results (`FP8 TP=8 x EP=8`, `1K`–`128K` Context)
+## Key Single-Host TPU `v7x` Results (`1K`–`128K` Context)
 
-- **Interactive & High-Concurrency Throughput (`1024` in / `1024` out):** `41.5 output tok/s` at `c=1` (`23.97 ms` median `TPOT`), scaling to **`1,301.4 output tok/s`** (`325.4 tok/s/chip`, `2,602.9 total tok/s`) at `c=64` (`38.73 ms` median `TPOT`).
-- **`4K` Context (`4096` in / `1024` out):** `41.1 output tok/s` at `c=1` (`24.08 ms` median `TPOT`), reaching **`1,050.8 output tok/s`** (`5,253.9 total tok/s`) at `c=64`.
+- **Interactive & High-Concurrency Throughput (`FP8 TP=8 x EP=8`, `1024` in / `1024` out):** `41.5 output tok/s` at `c=1` (`23.97 ms` median `TPOT`), scaling to **`1,301.4 output tok/s`** (`325.4 tok/s/chip`, `2,602.9 total tok/s`) at `c=64` (`38.73 ms` median `TPOT`).
+- **`4K` Context (`FP8 TP=8 x EP=8`, `4096` in / `1024` out):** `41.1 output tok/s` at `c=1` (`24.08 ms` median `TPOT`), reaching **`1,050.8 output tok/s`** (`5,254.0 total tok/s`) at `c=64`.
 - **Near-Flat `TPOT` Across `128x` Context Scaling (`64K` & `128K`):** Because `36` of `48` layers are constant-state Gated-DeltaNet linear attention and only `12` layers attend over the KV cache, single-stream median `TPOT` increases by just **`+3.5%` from `1K` to `128K`** (`23.97 ms` at `1K` -> `24.42 ms` at `64K` -> **`24.80 ms` at `128K`**, with `3.87 s` `64K` `TTFT` and `8.21 s` `128K` `TTFT`). A single `4`-chip host sustains **`139.2 output tok/s` at `64K` (`c=8`, `532K` tokens in flight)** and **`44.2 output tok/s` at `128K` (`c=4`, `526K` tokens in flight)** with zero OOMs or recompiles.
+- **Precision Scaling (`FP8` vs Unquantized `BF16` on `TP=8 x EP=8`):** Block-FP8 (`173 GiB`) achieves **`99.0%` 5-shot Chat-API `GSM8K`** (`0.0%` invalid on `q38_fp8_dp2attn_ep8`) vs **`98.5%`** on unquantized `BF16` (`336 GiB`), while delivering **`+15.6%` higher single-stream throughput** (`41.5` vs `35.9 tok/s`, `23.97 ms` vs `27.70 ms` `TPOT`) and **`+9.0%`–`+14.3%` higher batch throughput** (`1,301.4` vs `1,194.2 tok/s` at `c=64`).
+- **Expert Parallelism vs Expert Tensor Parallelism (`TP=8 x EP=8` vs `TP=8 x EP=1` in `BF16`):** Both layouts produce identical **`98.5%` `GSM8K` accuracy** (`197/200`), validating `80 -> 128` Pallas `gmm_v2` lane padding. `EP=8` (`64` experts/rank, unpadded `640` intermediate width) outperforms `EP=1` (`512` experts/rank padded `1.6x` from `80 -> 128`) by **`+26.1%` at `1K/1K c=64`** (`1,194.2` vs `946.7 tok/s`) and **`+29.2%` at `4K/1K c=64`** (`979.7` vs `758.1 tok/s`).
+- **Attention Data Parallelism (`TP=8` vs `DP=2 dp-attention x EP=8` in `FP8`):** `DP=2 dp-attention` (`2 x attn-TP=4` with `DP` LM head, **`99.0%` `GSM8K`**) incurs extra all-gather/reduce-scatter transitions across the `48` hybrid layers at low concurrency (`30.8` vs `41.5 tok/s` at `c=1`), but converges within **`2.2%` of pure `TP=8` at high concurrency** (`1,273.4` vs `1,301.4 output tok/s` at `1K/1K c=64`, and `961.4` vs `1,050.8 tok/s` at `4K/1K c=64`).
 
 ## Few-Shot GSM8K Accuracy & MTP Speculative Acceptance Gate
 
@@ -52,8 +55,9 @@ All patches are applied idempotently at container startup by [`scripts/q38_patch
 | Variant | Precision & Parallelism | Harness | Questions | Accuracy | Invalid | GSM8K Output tok/s | Latency (s) | MTP Accept Len |
 |---|---|---|---:|---:|---:|---:|---:|---:|
 | `q38_fp8_tp8_ep8` | FP8 W8A8 (128x128 blockwise runtime scales), TP=8 x EP=8, BF16 KV | raw `/generate` (`stop=["Question"]`) | 200 | **17.0%** | 65.0% | 581.6 | 31.96 | - |
+| `q38_fp8_dp2attn_ep8` | FP8 W8A8 (blockwise), TP=8 x DP=2 (dp-attention, 2x attn-TP4 + DP LM head) x EP=8, BF16 KV | chat `/v1/chat/completions` (`enable_thinking=false`) | 200 | **99.0%** | 0.0% | 288.1 | 100.04 | - |
 | `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | chat `/v1/chat/completions` (`enable_thinking=false`) | 200 | **98.5%** | 0.0% | 498.4 | 58.48 | - |
-| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | chat `/v1/chat/completions` (`enable_thinking=false`) | 200 | **98.5%** | 0.0% | 409.9 | 71.04 | - |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | chat `/v1/chat/completions` (`enable_thinking=false`) | 200 | **98.5%** | 0.0% | 408.1 | 70.99 | - |
 
 > [!NOTE]
 > On thinking-enabled checkpoints (`Qwen3.8-Flash-Next`), SGLang's legacy raw-completion `few_shot_gsm8k` script passes `stop=["Question"]` without chat templating (`enable_thinking=false`), truncating Chain-of-Thought traces whenever the model echoes the word `Question` (`65.0%` unparsed `invalid` above; among completed answers, `34 / 70` match ground truth before chat templating). Chat-API evaluations (`sglang.test.run_eval --eval-name gsm8k --api chat` with `enable_thinking=false`) are reported in subsequent rows.
@@ -79,6 +83,16 @@ Fixed-length ShareGPT-sampled requests (`--dataset-name random --random-range-ra
 | `q38_fp8_tp8_ep8` | FP8 W8A8 (128x128 blockwise runtime scales), TP=8 x EP=8, BF16 KV | `65536` / `1024` | 8 | 0.136 | **139.2** | 34.8 | 9,050.2 | 17,026 / 30,179 | 40.85 / 53.71 | - | - |
 | `q38_fp8_tp8_ep8` | FP8 W8A8 (128x128 blockwise runtime scales), TP=8 x EP=8, BF16 KV | `131072` / `512` | 1 | 0.048 | **24.5** | 6.1 | 6,294.6 | 8,212 / 8,234 | 24.80 / 24.80 | - | - |
 | `q38_fp8_tp8_ep8` | FP8 W8A8 (128x128 blockwise runtime scales), TP=8 x EP=8, BF16 KV | `131072` / `512` | 4 | 0.086 | **44.2** | 11.0 | 11,348.2 | 20,226 / 32,212 | 51.16 / 74.73 | - | - |
+| `q38_fp8_dp2attn_ep8` | FP8 W8A8 (blockwise), TP=8 x DP=2 (dp-attention, 2x attn-TP4 + DP LM head) x EP=8, BF16 KV | `1024` / `1024` | 1 | 0.030 | **30.8** | 7.7 | 61.6 | 259 / 310 | 32.25 / 32.26 | - | - |
+| `q38_fp8_dp2attn_ep8` | FP8 W8A8 (blockwise), TP=8 x DP=2 (dp-attention, 2x attn-TP4 + DP LM head) x EP=8, BF16 KV | `1024` / `1024` | 4 | 0.118 | **121.2** | 30.3 | 242.3 | 299 / 434 | 32.69 / 32.86 | - | - |
+| `q38_fp8_dp2attn_ep8` | FP8 W8A8 (blockwise), TP=8 x DP=2 (dp-attention, 2x attn-TP4 + DP LM head) x EP=8, BF16 KV | `1024` / `1024` | 16 | 0.425 | **435.1** | 108.8 | 870.3 | 897 / 1,563 | 35.98 / 36.36 | - | - |
+| `q38_fp8_dp2attn_ep8` | FP8 W8A8 (blockwise), TP=8 x DP=2 (dp-attention, 2x attn-TP4 + DP LM head) x EP=8, BF16 KV | `1024` / `1024` | 32 | 0.740 | **758.0** | 189.5 | 1,516.1 | 1,561 / 3,165 | 40.67 / 41.74 | - | - |
+| `q38_fp8_dp2attn_ep8` | FP8 W8A8 (blockwise), TP=8 x DP=2 (dp-attention, 2x attn-TP4 + DP LM head) x EP=8, BF16 KV | `1024` / `1024` | 64 | 1.244 | **1,273.4** | 318.4 | 2,546.8 | 3,357 / 5,700 | 46.97 / 49.60 | - | - |
+| `q38_fp8_dp2attn_ep8` | FP8 W8A8 (blockwise), TP=8 x DP=2 (dp-attention, 2x attn-TP4 + DP LM head) x EP=8, BF16 KV | `4096` / `1024` | 1 | 0.030 | **30.3** | 7.6 | 151.6 | 715 / 769 | 32.28 / 32.29 | - | - |
+| `q38_fp8_dp2attn_ep8` | FP8 W8A8 (blockwise), TP=8 x DP=2 (dp-attention, 2x attn-TP4 + DP LM head) x EP=8, BF16 KV | `4096` / `1024` | 16 | 0.381 | **390.6** | 97.7 | 1,953.1 | 3,358 / 5,765 | 38.04 / 40.45 | - | - |
+| `q38_fp8_dp2attn_ep8` | FP8 W8A8 (blockwise), TP=8 x DP=2 (dp-attention, 2x attn-TP4 + DP LM head) x EP=8, BF16 KV | `4096` / `1024` | 64 | 0.939 | **961.4** | 240.4 | 4,807.0 | 11,990 / 21,544 | 55.15 / 65.85 | - | - |
+| `q38_fp8_dp2attn_ep8` | FP8 W8A8 (blockwise), TP=8 x DP=2 (dp-attention, 2x attn-TP4 + DP LM head) x EP=8, BF16 KV | `65536` / `1024` | 1 | 0.022 | **23.0** | 5.7 | 1,493.6 | 11,157 / 11,171 | 32.63 / 32.63 | - | - |
+| `q38_fp8_dp2attn_ep8` | FP8 W8A8 (blockwise), TP=8 x DP=2 (dp-attention, 2x attn-TP4 + DP LM head) x EP=8, BF16 KV | `65536` / `1024` | 4 | 0.069 | **70.3** | 17.6 | 4,570.0 | 17,679 / 24,412 | 39.89 / 46.31 | - | - |
 | `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | `1024` / `1024` | 1 | 0.035 | **35.9** | 9.0 | 71.8 | 179 / 181 | 27.70 / 27.71 | - | - |
 | `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | `1024` / `1024` | 4 | 0.133 | **135.8** | 34.0 | 271.6 | 484 / 595 | 28.96 / 29.33 | - | - |
 | `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | `1024` / `1024` | 16 | 0.465 | **475.7** | 118.9 | 951.5 | 598 / 1,034 | 33.07 / 33.42 | - | - |
@@ -92,16 +106,16 @@ Fixed-length ShareGPT-sampled requests (`--dataset-name random --random-range-ra
 | `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | `65536` / `1024` | 1 | 0.031 | **31.5** | 7.9 | 2,044.5 | 3,813 / 3,818 | 28.08 / 28.09 | - | - |
 | `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | `65536` / `1024` | 4 | 0.087 | **88.9** | 22.2 | 5,779.1 | 9,374 / 14,943 | 35.85 / 41.30 | - | - |
 | `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 x EP=8 | `131072` / `512` | 1 | 0.044 | **22.6** | 5.6 | 5,803.6 | 8,108 / 8,114 | 28.46 / 28.47 | - | - |
-| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `1024` / `1024` | 1 | 0.034 | **34.9** | 8.7 | 69.8 | 237 / 240 | 28.46 / 28.46 | - | - |
-| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `1024` / `1024` | 4 | 0.128 | **131.1** | 32.8 | 262.3 | 694 / 865 | 29.79 / 30.35 | - | - |
-| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `1024` / `1024` | 16 | 0.408 | **417.5** | 104.4 | 834.9 | 875 / 1,522 | 37.37 / 38.09 | - | - |
-| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `1024` / `1024` | 32 | 0.692 | **709.1** | 177.3 | 1,418.2 | 1,759 / 2,820 | 43.45 / 44.53 | - | - |
-| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `1024` / `1024` | 64 | 0.925 | **946.7** | 236.7 | 1,893.5 | 3,290 / 10,332 | 54.68 / 57.21 | - | - |
-| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `4096` / `1024` | 1 | 0.034 | **34.3** | 8.6 | 171.6 | 686 / 689 | 28.49 / 28.49 | - | - |
-| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `4096` / `1024` | 16 | 0.365 | **373.8** | 93.5 | 1,869.2 | 3,274 / 5,890 | 40.02 / 42.27 | - | - |
-| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `4096` / `1024` | 64 | 0.740 | **758.2** | 189.6 | 3,791.0 | 11,749 / 26,506 | 63.05 / 73.85 | - | - |
-| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `65536` / `1024` | 1 | 0.029 | **29.2** | 7.3 | 1,899.8 | 5,510 / 5,534 | 28.84 / 28.84 | - | - |
-| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `131072` / `512` | 1 | 0.038 | **19.3** | 4.8 | 4,965.3 | 11,547 / 11,634 | 29.22 / 29.22 | - | - |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `1024` / `1024` | 1 | 0.034 | **34.9** | 8.7 | 69.8 | 237 / 240 | 28.45 / 28.45 | - | - |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `1024` / `1024` | 4 | 0.128 | **131.1** | 32.8 | 262.3 | 692 / 862 | 29.79 / 30.35 | - | - |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `1024` / `1024` | 16 | 0.408 | **417.4** | 104.4 | 834.9 | 1,110 / 1,520 | 37.25 / 38.11 | - | - |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `1024` / `1024` | 32 | 0.692 | **708.8** | 177.2 | 1,417.6 | 1,994 / 2,821 | 43.23 / 44.53 | - | - |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `1024` / `1024` | 64 | 0.925 | **946.7** | 236.7 | 1,893.5 | 3,290 / 10,332 | 54.68 / 57.22 | - | - |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `4096` / `1024` | 1 | 0.034 | **34.3** | 8.6 | 171.6 | 688 / 690 | 28.48 / 28.48 | - | - |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `4096` / `1024` | 16 | 0.365 | **373.8** | 93.4 | 1,868.9 | 3,279 / 5,897 | 40.02 / 42.28 | - | - |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `4096` / `1024` | 64 | 0.740 | **758.1** | 189.5 | 3,790.7 | 11,751 / 26,509 | 63.05 / 73.86 | - | - |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `65536` / `1024` | 1 | 0.029 | **29.2** | 7.3 | 1,899.5 | 5,519 / 5,539 | 28.84 / 28.84 | - | - |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 x EP=1 (expert tensor-parallel, 80->128 gmm_v2 lane pad) | `131072` / `512` | 1 | 0.038 | **19.3** | 4.8 | 4,972.5 | 11,512 / 11,575 | 29.22 / 29.22 | - | - |
 
 ## Reproducing the Sweep on GKE (`tpu7x`, `2x2x2` Single Host)
 
