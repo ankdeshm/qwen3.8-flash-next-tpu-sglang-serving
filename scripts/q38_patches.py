@@ -30,7 +30,7 @@ TPU_ROOTS = [
 PLE_PATCH = HERE / "q38_qwen4_exp_tpu_ple.py"
 PLE_MARKER = "# q38 TPU bring-up patch for Qwen4-Exp per-layer n-gram embeddings (PLE)."
 LM_ONLY_MARKER = "# q38: register Qwen4ExpForConditionalGeneration in LANGUAGE_MODEL_ONLY_ARCHITECTURES"
-MTP_MARKER = "# q38: int32 lower-triangular prefix sum instead of int64 cumsum (TPU XLA U64 abort)"
+MTP_MARKER = "# q38: int32 lower-triangular prefix sum instead of int64 cumsum (TPU XLA int32 compatibility)"
 MTP_COS_SIN_MARKER = "# q38: pre-cast MTP rotary cos_sin_cache to bfloat16 before direct_compile"
 NVFP4_MARKER = "# q38: TPU NVFP4 MoE method never sets the flashinfer-TRTLLM layout flag"
 QWEN2_MOE_NVFP4_MARKER = "# q38: opt Qwen2MoeSparseMoeBlock into TPU NVFP4 fused-RS backend reduction"
@@ -62,15 +62,17 @@ DESC_MTP = (
     "qwen4_exp_mtp.py + rotary_embedding/{base,mrope}.py + hyperconnection.py + sglang_tpu MTP/direct_compile: int32 "
     "prefix sum in Qwen4ExpForCausalLMMTP; disable nested torch.compile on partial-RoPE apply_rotary_emb and "
     "GatedResidual._mix_compute/_combine_compute so direct_compile (make_fx) traces without placeholder materialization "
-    "errors; lift ShortConvPool + NGramPool buffers in HybridLinearKVPoolState; support hc_count=4 (10,240-dim carry + "
-    "_mix_streams before lm_head) in TpuMtpDraftWorker; and static-shape int32 PLE verify commit in HybridLinearAttnBackend"
+    "errors; lift req_index_to_mamba_index_mapping + ShortConvPool + NGramPool buffers in HybridLinearKVPoolState; "
+    "support hc_count=4 (10,240-dim carry + _mix_streams before lm_head) in TpuMtpDraftWorker; and static-shape int32 "
+    "PLE verify commit in HybridLinearAttnBackend"
 )
 DESC_NVFP4 = (
-    "modelopt_quant.py + qwen2_moe.py + gmm_fused_rs_nodedup.py: set "
+    "modelopt_quant.py + qwen2_moe.py + fused_rs/{fused_moe,gmm_fused_rs_nodedup}.py: set "
     "TpuModelOptNvFp4FusedMoEMethod.use_flashinfer_trtllm_weight_layout = False, opt Qwen2MoeSparseMoeBlock into "
     "allow_backend_reduction=True for FP4 quant configs, pre-scale already-TP-summed fused-RS routed outputs by "
-    "1/tp_size before adding the unreduced shared expert, and migrate deprecated pltpu.{semaphore_signal,"
-    "semaphore_wait,DeviceIdType} calls to pl.* for JAX 0.11+"
+    "1/tp_size before adding the unreduced shared expert, widen non-SP fused-RS routing broadcast from bfloat16 "
+    "(exact up to 256 experts; float32 preserves exact 0..511 indices) to float32 for 512-expert "
+    "models, and migrate deprecated pltpu.{semaphore_signal,semaphore_wait,DeviceIdType} calls to pl.* for JAX 0.11+"
 )
 
 
@@ -175,6 +177,7 @@ def _patch_qwen4_mtp_and_tpu_spec() -> str:
     # 1) qwen4_exp_mtp.py: int32 prefix sum + bfloat16 cos_sin_cache after load_weights
     src = QWEN4_EXP_MTP_PY.read_text()
     changed_mtp = False
+    MTP_FULL_CAPTURE_MARKER = "# q38: preserve FULL verify rows in _set_hc_logits_hidden_states"
     if MTP_MARKER not in src:
         old = (
             "            last_index = (\n"
@@ -192,6 +195,35 @@ def _patch_qwen4_mtp_and_tpu_spec() -> str:
         )
         assert src.count(old) == 1, "unexpected qwen4_exp_mtp.py layout"
         src = src.replace(old, new, 1)
+        changed_mtp = True
+    if MTP_FULL_CAPTURE_MARKER not in src:
+        old_cap = (
+            "        if hc_hidden_states is None:\n"
+            "            return\n"
+        )
+        new_cap = (
+            "        if hc_hidden_states is None:\n"
+            "            return\n"
+            f"        {MTP_FULL_CAPTURE_MARKER}\n"
+            "        if not forward_batch.capture_hidden_mode.need_capture():\n"
+            "            return\n"
+        )
+        old_elif = (
+            "        elif (\n"
+            "            forward_batch.extend_seq_lens is not None\n"
+            "            and hc_hidden_states.shape[0] != forward_batch.extend_seq_lens.shape[0]\n"
+            "        ):"
+        )
+        new_elif = (
+            "        elif (\n"
+            "            forward_batch.capture_hidden_mode.is_last()\n"
+            "            and forward_batch.extend_seq_lens is not None\n"
+            "            and hc_hidden_states.shape[0] != forward_batch.extend_seq_lens.shape[0]\n"
+            "        ):"
+        )
+        assert src.count(old_cap) == 1, "unexpected qwen4_exp_mtp.py hc_hidden_states guard"
+        assert src.count(old_elif) == 1, "unexpected qwen4_exp_mtp.py elif extend_seq_lens guard"
+        src = src.replace(old_cap, new_cap, 1).replace(old_elif, new_elif, 1)
         changed_mtp = True
     if MTP_COS_SIN_MARKER not in src:
         tail = (
@@ -571,6 +603,8 @@ def _patch_nvfp4() -> str:
         moe_src = moe_src.replace(old_init, new_init, 1).replace(old_ret, new_ret, 1).replace(old_m0, new_m0, 1)
         QWEN2_MOE_PY.write_text(moe_src)
     # JAX 0.11+ removed pltpu.semaphore_signal, pltpu.semaphore_wait, and pltpu.DeviceIdType (moved to pl.*).
+    # Also, fused_rs/fused_moe.py broadcasts non-SP routing via bfloat16 (exact only up to 256 experts); for 512-expert
+    # Qwen3.8-Flash-Next, bfloat16(511) == 512.0 exceeds bfloat16 integer precision; float32 preserves all 512 expert indices.
     for tpu_root in TPU_ROOTS:
         gmm_rs_py = tpu_root / "moe/pallas/fused_rs/gmm_fused_rs_nodedup.py"
         if gmm_rs_py.exists():
@@ -582,6 +616,14 @@ def _patch_nvfp4() -> str:
             )
             if gnew != gsrc:
                 gmm_rs_py.write_text(gnew)
+        fmoe_rs_py = tpu_root / "moe/pallas/fused_rs/fused_moe.py"
+        if fmoe_rs_py.exists():
+            fsrc = fmoe_rs_py.read_text()
+            old_bf16_route = "(topk_indices.astype(jnp.bfloat16), topk_weights.astype(jnp.bfloat16))"
+            new_fp32_route = "(topk_indices.astype(jnp.float32), topk_weights.astype(jnp.float32))"
+            if old_bf16_route in fsrc:
+                assert fsrc.count(old_bf16_route) == 1, f"unexpected {fmoe_rs_py} routing layout"
+                fmoe_rs_py.write_text(fsrc.replace(old_bf16_route, new_fp32_route, 1))
     return DESC_NVFP4
 
 
@@ -611,6 +653,7 @@ def apply_all() -> list[str]:
         patched_files.append(tpu_root / "compilation/hybrid_linear_direct_compile.py")
         patched_files.append(tpu_root / "experimental/speculative/mtp/mtp_draft_worker.py")
         patched_files.append(tpu_root / "moe/pallas/fused_rs/gmm_fused_rs_nodedup.py")
+        patched_files.append(tpu_root / "moe/pallas/fused_rs/fused_moe.py")
     for py in patched_files:
         if py.exists():
             for pyc in py.parent.glob(f"__pycache__/{py.stem}.*.pyc"):

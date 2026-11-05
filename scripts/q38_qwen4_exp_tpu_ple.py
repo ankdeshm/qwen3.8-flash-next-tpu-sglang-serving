@@ -12,10 +12,10 @@
 #      "Unsupported object.__new__ user-defined class construction";
 #   2. slices by host-side real-token counts (global_num_token_non_padded_cpu,
 #      sum/max(extend_seq_lens_cpu)) -> one compiled program per prompt length;
-#   3. calls CUDA/Triton fused kernels and torch.cummax;
+#   3. calls platform-specific fused kernels and torch.cummax;
 #   4. hashes n-grams with int64 multiply / xor / remainder and int64 cumsum, which the
 #      TPU XLA backend rejects ("Unsupported conversion from vmreg/vreg to U64",
-#      windowing_util window_bounds check) -> compiler abort.
+#      windowing_util window_bounds check) -> unsupported U64 cast on TPU XLA.
 # This block keeps the math identical but
 #   * _PLEBatch is a typing.NamedTuple (positional construction);
 #   * processed_tokens == physical (padded) tokens; padded rows are masked with
@@ -30,7 +30,7 @@
 #     evaluated exactly with base-2^12 limbs (every product of the checkpoint's
 #     multipliers and token ids is < 2^63 by construction, so the xor is non-negative and
 #     the int64 Python-style remainder equals the unsigned limb remainder);
-#   * no fused CUDA/Triton kernels, no cross-layer window cache, no cummax / cumsum.
+#   * no platform-specific fused kernels, no cross-layer window cache, no cummax / cumsum.
 # ======================================================================================
 from typing import NamedTuple as _Q38NamedTuple
 

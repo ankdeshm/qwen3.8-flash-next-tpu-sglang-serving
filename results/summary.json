@@ -1,10 +1,16 @@
 {
-  "updated_at_utc": "2026-11-04T02:07:23.251628+00:00",
+  "updated_at_utc": "2026-11-04T04:02:05+00:00",
   "title": "Qwen3.8-Flash-Next (Qwen4ExpForConditionalGeneration: 48 layers = 36 Gated-DeltaNet + 12 full attention, 512 experts top-10, hyper-connections x4, per-layer n-gram embedding, MTP head) on One TPU v7x Host (4 Chips / 8 TensorCores) with SGLang-TorchTPU v0.2.0",
   "model_repo": "Qwen/Qwen3.8-Flash-Next-FP8, Qwen/Qwen3.8-Flash-Next (BF16), RadixArk/Qwen3.8-Flash-Next-NVFP4",
   "model_gb": 185.6,
   "image": "sglang-torchtpu-diffusion:v0.2.0",
   "run_id": "qwen38_flash_next_sglang_v7x_1host_20261103T085724Z",
+  "source_runs": [
+    "qwen38_flash_next_sglang_v7x_1host_20261103T085724Z",
+    "qwen38_flash_next_sglang_v7x_rqkr_20261103T122600Z",
+    "qwen38_flash_next_sglang_v7x_mtp3_20261104T034600Z",
+    "qwen38_flash_next_sglang_v7x_nvfp4_20261104T031000Z"
+  ],
   "gcs_uri": "gs://YOUR_GCS_BUCKET/benchmark-results/qwen38_flash_next_sglang_v7x_1host_20261103T085724Z",
   "plan": {
     "tag": "qwen38_flash_next_sglang_v7x_1host",
@@ -118,6 +124,81 @@
         }
       },
       {
+        "name": "q38_fp8_tp8_ep8_mtp3",
+        "desc": "FP8 W8A8 (blockwise), TP=8 x EP=8, BF16 KV + MTP speculative decoding (NEXTN, 3 steps, topk 1, 4 draft tokens)",
+        "ready_timeout_s": 5400,
+        "gsm8k": {
+          "num_questions": 200,
+          "num_shots": 5,
+          "parallel": 32,
+          "max_new_tokens": 1024,
+          "data_path": "/dev/shm/q38_gsm8k_test.jsonl"
+        },
+        "server_args": {
+          "tp_size": 8,
+          "ep_size": 8,
+          "quantization": "fp8",
+          "kv_cache_dtype": "bfloat16",
+          "tpu_fp8_runtime": "blockwise",
+          "max_running_requests": 32,
+          "torch_compile_max_bs": 32,
+          "tpu_compile_bs": [
+            1,
+            4,
+            16,
+            32
+          ],
+          "max_total_tokens": 1048576,
+          "max_mamba_cache_size": 96,
+          "tpu_compile_tracer": "direct",
+          "speculative_algorithm": "NEXTN",
+          "speculative_num_steps": 3,
+          "speculative_eagle_topk": 1,
+          "speculative_num_draft_tokens": 4,
+          "gc_threshold": [
+            50000,
+            100,
+            100
+          ]
+        },
+        "runtime_env": {
+          "SGLANG_TPU_ENABLE_EXPERIMENTAL_SPEC_WORKER": "1",
+          "SGLANG_SPEC_TP_SYNC": "rng",
+          "SGLANG_RAGGED_VERIFY_MODE": "static",
+          "SGLANG_TPU_ENABLE_NN_MODULE_GUARD_FILTER": "1",
+          "SGLANG_TPU_FP8_MOE_FP32_SCALES": "1"
+        },
+        "workloads": [
+          [
+            1024,
+            1024,
+            [
+              1,
+              4,
+              16,
+              32
+            ]
+          ],
+          [
+            4096,
+            1024,
+            [
+              1,
+              4,
+              16,
+              32
+            ]
+          ],
+          [
+            65536,
+            1024,
+            [
+              1
+            ]
+          ]
+        ]
+      },
+      {
         "name": "q38_fp8_dp2attn_ep8",
         "desc": "FP8 W8A8 (blockwise), TP=8 x DP=2 (dp-attention, 2x attn-TP4 + DP LM head) x EP=8, BF16 KV",
         "ready_timeout_s": 5400,
@@ -175,6 +256,72 @@
             [
               1,
               4
+            ]
+          ]
+        ]
+      },
+      {
+        "name": "q38_nvfp4_tp8_ep8",
+        "desc": "NVFP4 experts (RadixArk modelopt_fp4, group_size=16) via Pallas fused-RS MoE, TP=8 x EP=8, BF16 KV",
+        "model_gcs": "gs://YOUR_GCS_BUCKET/models/RadixArk/Qwen3.8-Flash-Next-NVFP4",
+        "ready_timeout_s": 5400,
+        "server_args": {
+          "tp_size": 8,
+          "ep_size": 8,
+          "quantization": "modelopt_fp4",
+          "moe_runner_backend": "pallas_tpu_fused_rs",
+          "kv_cache_dtype": "bfloat16",
+          "max_running_requests": 64,
+          "torch_compile_max_bs": 64,
+          "tpu_compile_bs": [
+            1,
+            4,
+            16,
+            32,
+            64
+          ],
+          "max_total_tokens": 1310720,
+          "max_mamba_cache_size": 160
+        },
+        "extra_libtpu": [
+          "--xla_tpu_enable_sparse_core_collective_offload_all_gather=false"
+        ],
+        "workloads": [
+          [
+            1024,
+            1024,
+            [
+              1,
+              4,
+              16,
+              32,
+              64
+            ]
+          ],
+          [
+            4096,
+            1024,
+            [
+              1,
+              4,
+              16,
+              32,
+              64
+            ]
+          ],
+          [
+            65536,
+            1024,
+            [
+              1,
+              4
+            ]
+          ],
+          [
+            131072,
+            512,
+            [
+              1
             ]
           ]
         ]
@@ -304,12 +451,12 @@
       }
     ]
   },
-  "runtime_patches": [
-    "layernorm_gated.py (native-torch RMSNormGated): add the sigmoid gate, rmsnorm(x)*sigmoid(z), used by the Qwen3.8 Gated-DeltaNet output norm (TPU fallback only implemented SiLU)",
-    "qwen4_exp.py + server_args.py PLE & whole-model language_model_only DecoderTpuCompilePolicy (block appended from q38_qwen4_exp_tpu_ple.py): register Qwen4ExpForConditionalGeneration in LANGUAGE_MODEL_ONLY_ARCHITECTURES; _PLEBatch msgspec.Struct -> NamedTuple; padded static shapes; flat token-major EXTEND layout; fresh requests zero-masked in-graph; exact base-2^12 int32 limb n-gram hash; root short_conv_pool index_put_ writes; and whole-model Qwen4ExpForConditionalGeneration.forward compiling LogitsProcessor + lm_head in-graph when language_model_only=True (enables DP=2 dp-attention and MTP hc_hidden_states output leaves)",
-    "ple_state_pool.py NGramPool: int32 storage/indices and root index_put_ in set_intermediate_context (no s64 state or slice-view .copy_() under TPU direct_compile)",
-    "qwen4_exp_mtp.py + rotary_embedding/{base,mrope}.py + hyperconnection.py + sglang_tpu MTP/direct_compile: int32 prefix sum in Qwen4ExpForCausalLMMTP; disable nested torch.compile on partial-RoPE apply_rotary_emb and GatedResidual._mix_compute/_combine_compute so direct_compile (make_fx) traces without placeholder materialization errors; lift ShortConvPool + NGramPool buffers in HybridLinearKVPoolState; support hc_count=4 (10,240-dim carry + _mix_streams before lm_head) in TpuMtpDraftWorker; and static-shape int32 PLE verify commit in HybridLinearAttnBackend",
-    "modelopt_quant.py + qwen2_moe.py + gmm_fused_rs_nodedup.py: set TpuModelOptNvFp4FusedMoEMethod.use_flashinfer_trtllm_weight_layout = False, opt Qwen2MoeSparseMoeBlock into allow_backend_reduction=True for FP4 quant configs, pre-scale already-TP-summed fused-RS routed outputs by 1/tp_size before adding the unreduced shared expert, and migrate deprecated pltpu.{semaphore_signal,semaphore_wait,DeviceIdType} calls to pl.* for JAX 0.11+"
+  "modifications": [
+    "layernorm_gated.py (native-PyTorch RMSNormGated): adds sigmoid gating, rmsnorm(x) * sigmoid(z), used by the Qwen3.8 Gated-DeltaNet output norm.",
+    "qwen4_exp.py + server_args.py (PLE & whole-model language_model_only DecoderTpuCompilePolicy, via q38_qwen4_exp_tpu_ple.py): registers Qwen4ExpForConditionalGeneration in LANGUAGE_MODEL_ONLY_ARCHITECTURES; uses NamedTuple _PLEBatch with static padded shapes and flat token-major EXTEND layout; zero-masks fresh-request short-conv state and sets EOS n-gram history in-graph; evaluates the 3-gram hash via exact 6x12-bit int32 limb arithmetic; uses root index_put_ pool updates; and compiles LogitsProcessor + lm_head in-graph when language_model_only=True (supporting DP=2 dp-attention and MTP hc_hidden_states outputs).",
+    "ple_state_pool.py (NGramPool): uses int32 storage and root index_put_ updates in set_intermediate_context for TPU XLA and direct_compile compatibility.",
+    "qwen4_exp_mtp.py + rotary_embedding/{base,mrope}.py + hyperconnection.py + sglang_tpu MTP/direct_compile: uses int32 prefix sums in Qwen4ExpForCausalLMMTP; preserves full verify rows in _set_hc_logits_hidden_states; disables inner torch.compile wrappers on partial-RoPE apply_rotary_emb and GatedResidual._mix_compute/_combine_compute under outer make_fx tracing; lifts req_index_to_mamba_index_mapping + ShortConvPool + NGramPool buffers in HybridLinearKVPoolState; supports hc_count=4 (10,240-dim stream carry + _mix_streams before lm_head) in TpuMtpDraftWorker; and uses static-shape int32 PLE state commit in HybridLinearAttnBackend.",
+    "modelopt_quant.py + qwen2_moe.py + fused_rs/{fused_moe,gmm_fused_rs_nodedup}.py: sets TpuModelOptNvFp4FusedMoEMethod.use_flashinfer_trtllm_weight_layout = False, enables allow_backend_reduction=True on Qwen2MoeSparseMoeBlock for FP4 configs, scales TP-summed Pallas fused-RS routed outputs by 1/tp_size before adding the unreduced shared expert, widens non-SP fused-RS routing broadcast from bfloat16 to float32 for 512-expert routing indices, and updates Pallas semaphore calls to pl.* for JAX 0.11+."
   ],
   "server_home": "/dev/shm/q38_home",
   "variants": [
@@ -830,8 +977,371 @@
         "accuracy": 0.17,
         "invalid": 0.65,
         "latency": 31.957,
-        "output_throughput": 581.601
+        "output_throughput": 581.601,
+        "harness": "raw `/generate` (`stop=[\"Question\"]`)"
       }
+    },
+    {
+      "name": "q38_fp8_tp8_ep8_mtp3",
+      "desc": "FP8 W8A8 (blockwise), TP=8 x EP=8, BF16 KV + MTP speculative decoding (NEXTN, 3 steps, topk 1, 4 draft tokens)",
+      "status": "DONE",
+      "cells": [
+        {
+          "input_len": 1024,
+          "output_len": 1024,
+          "concurrency": 1,
+          "num_prompts": 4,
+          "return_code": 0,
+          "wall_s": 62.9,
+          "metrics": {
+            "completed": 4,
+            "duration": 48.027456583993626,
+            "request_throughput": 0.08328569290369421,
+            "input_throughput": 85.28454953338287,
+            "output_throughput": 85.28454953338287,
+            "total_throughput": 170.56909906676574,
+            "mean_ttft_ms": 167.75032650184585,
+            "median_ttft_ms": 171.68840450176504,
+            "p99_ttft_ms": 177.19308502651984,
+            "mean_tpot_ms": 11.561869894915848,
+            "median_tpot_ms": 11.525693681325322,
+            "p99_tpot_ms": 14.62079965677255,
+            "mean_itl_ms": 11.561798150296676,
+            "median_itl_ms": 7.808587750332663,
+            "p99_itl_ms": 30.933414738683496,
+            "mean_e2e_latency_ms": 11995.54322900076,
+            "accept_length": 3.032777036048064,
+            "total_input_tokens": 4096,
+            "total_output_tokens": 4096
+          }
+        },
+        {
+          "input_len": 1024,
+          "output_len": 1024,
+          "concurrency": 4,
+          "num_prompts": 12,
+          "return_code": 0,
+          "wall_s": 53.7,
+          "metrics": {
+            "completed": 12,
+            "duration": 41.22483984599239,
+            "request_throughput": 0.2910866372029475,
+            "input_throughput": 298.0727164958182,
+            "output_throughput": 298.0727164958182,
+            "total_throughput": 596.1454329916364,
+            "mean_ttft_ms": 310.3829726642289,
+            "median_ttft_ms": 206.1430335015757,
+            "p99_ttft_ms": 607.8606254400802,
+            "mean_tpot_ms": 12.471866039589878,
+            "median_tpot_ms": 12.400918527863503,
+            "p99_tpot_ms": 14.646862913886684,
+            "mean_itl_ms": 12.471826768980156,
+            "median_itl_ms": 8.475100752548315,
+            "p99_itl_ms": 34.522288256994216,
+            "mean_e2e_latency_ms": 13069.101931164672,
+            "accept_length": 2.9608285479901557,
+            "total_input_tokens": 12288,
+            "total_output_tokens": 12288
+          }
+        },
+        {
+          "input_len": 1024,
+          "output_len": 1024,
+          "concurrency": 16,
+          "num_prompts": 48,
+          "return_code": 0,
+          "wall_s": 70.1,
+          "metrics": {
+            "completed": 48,
+            "duration": 57.4082032009901,
+            "request_throughput": 0.8361174418218363,
+            "input_throughput": 856.1842604255604,
+            "output_throughput": 856.1842604255604,
+            "total_throughput": 1712.3685208511208,
+            "mean_ttft_ms": 432.8936887911065,
+            "median_ttft_ms": 222.7411209969432,
+            "p99_ttft_ms": 1123.3646458431033,
+            "mean_tpot_ms": 16.197254773155894,
+            "median_tpot_ms": 16.244178040067254,
+            "p99_tpot_ms": 27.316600878938115,
+            "mean_itl_ms": 16.20185869686309,
+            "median_itl_ms": 10.375956750067417,
+            "p99_itl_ms": 57.50606462732927,
+            "mean_e2e_latency_ms": 17002.685321729587,
+            "accept_length": 2.851289833080425,
+            "total_input_tokens": 49152,
+            "total_output_tokens": 49152
+          }
+        },
+        {
+          "input_len": 1024,
+          "output_len": 1024,
+          "concurrency": 32,
+          "num_prompts": 96,
+          "return_code": 0,
+          "wall_s": 83.4,
+          "metrics": {
+            "completed": 96,
+            "duration": 70.85193347799941,
+            "request_throughput": 1.354938324016372,
+            "input_throughput": 1387.4568437927649,
+            "output_throughput": 1387.4568437927649,
+            "total_throughput": 2774.9136875855297,
+            "mean_ttft_ms": 604.3894580308612,
+            "median_ttft_ms": 282.84784100105753,
+            "p99_ttft_ms": 1990.7988545492117,
+            "mean_tpot_ms": 19.566549810779687,
+            "median_tpot_ms": 18.630577377815783,
+            "p99_tpot_ms": 32.951002856697,
+            "mean_itl_ms": 19.57610644497776,
+            "median_itl_ms": 12.10548812377965,
+            "p99_itl_ms": 90.61737359639667,
+            "mean_e2e_latency_ms": 20620.96991445848,
+            "accept_length": 2.8284751821806684,
+            "total_input_tokens": 98304,
+            "total_output_tokens": 98304
+          }
+        },
+        {
+          "input_len": 4096,
+          "output_len": 1024,
+          "concurrency": 1,
+          "num_prompts": 4,
+          "return_code": 0,
+          "wall_s": 52.4,
+          "metrics": {
+            "completed": 4,
+            "duration": 39.687632715998916,
+            "request_throughput": 0.10078706454032256,
+            "input_throughput": 412.8238163571612,
+            "output_throughput": 103.2059540892903,
+            "total_throughput": 516.0297704464515,
+            "mean_ttft_ms": 479.84156149686896,
+            "median_ttft_ms": 484.2118419983308,
+            "p99_ttft_ms": 486.13062756470754,
+            "mean_tpot_ms": 9.218893092379593,
+            "median_tpot_ms": 9.286090355824335,
+            "p99_tpot_ms": 10.36483873015839,
+            "mean_itl_ms": 9.218841032017375,
+            "median_itl_ms": 7.698615747358417,
+            "p99_itl_ms": 31.018005303631075,
+            "mean_e2e_latency_ms": 9910.769195001194,
+            "accept_length": 2.8365012843044477,
+            "total_input_tokens": 16384,
+            "total_output_tokens": 4096
+          }
+        },
+        {
+          "input_len": 4096,
+          "output_len": 1024,
+          "concurrency": 4,
+          "num_prompts": 12,
+          "return_code": 0,
+          "wall_s": 55.9,
+          "metrics": {
+            "completed": 12,
+            "duration": 43.29662442300469,
+            "request_throughput": 0.2771578653051777,
+            "input_throughput": 1135.238616290008,
+            "output_throughput": 283.809654072502,
+            "total_throughput": 1419.0482703625098,
+            "mean_ttft_ms": 651.8784828319136,
+            "median_ttft_ms": 518.0369059962686,
+            "p99_ttft_ms": 1319.901267505193,
+            "mean_tpot_ms": 12.228132247396195,
+            "median_tpot_ms": 12.233115012222004,
+            "p99_tpot_ms": 16.601851377275597,
+            "mean_itl_ms": 12.2280960971813,
+            "median_itl_ms": 8.52669225059799,
+            "p99_itl_ms": 34.981335997144924,
+            "mean_e2e_latency_ms": 13161.25777191822,
+            "accept_length": 2.8468436154949783,
+            "total_input_tokens": 49152,
+            "total_output_tokens": 12288
+          }
+        },
+        {
+          "input_len": 4096,
+          "output_len": 1024,
+          "concurrency": 16,
+          "num_prompts": 48,
+          "return_code": 0,
+          "wall_s": 80.5,
+          "metrics": {
+            "completed": 48,
+            "duration": 67.42268146699644,
+            "request_throughput": 0.7119265943686341,
+            "input_throughput": 2916.0513305339255,
+            "output_throughput": 729.0128326334814,
+            "total_throughput": 3645.064163167407,
+            "mean_ttft_ms": 1135.2438147711534,
+            "median_ttft_ms": 532.8329884941923,
+            "p99_ttft_ms": 4091.739719591133,
+            "mean_tpot_ms": 18.710352903939118,
+            "median_tpot_ms": 18.41252825561828,
+            "p99_tpot_ms": 26.106293451360386,
+            "mean_itl_ms": 18.71681419738387,
+            "median_itl_ms": 10.391365747636883,
+            "p99_itl_ms": 123.98834134415665,
+            "mean_e2e_latency_ms": 20275.934835500873,
+            "accept_length": 2.8730759872631677,
+            "total_input_tokens": 196608,
+            "total_output_tokens": 49152
+          }
+        },
+        {
+          "input_len": 4096,
+          "output_len": 1024,
+          "concurrency": 32,
+          "num_prompts": 96,
+          "return_code": 0,
+          "wall_s": 107.1,
+          "metrics": {
+            "completed": 96,
+            "duration": 94.19685761700384,
+            "request_throughput": 1.0191422774454704,
+            "input_throughput": 4174.406768416647,
+            "output_throughput": 1043.6016921041617,
+            "total_throughput": 5218.0084605208085,
+            "mean_ttft_ms": 1955.8153049163896,
+            "median_ttft_ms": 601.496847004455,
+            "p99_ttft_ms": 7713.9920387046,
+            "mean_tpot_ms": 25.90454546906576,
+            "median_tpot_ms": 25.220746951609467,
+            "p99_tpot_ms": 42.47652681852866,
+            "mean_itl_ms": 25.912975920163728,
+            "median_itl_ms": 12.126259498472791,
+            "p99_itl_ms": 249.16642149582913,
+            "mean_e2e_latency_ms": 28456.165319770662,
+            "accept_length": 2.8892851012032024,
+            "total_input_tokens": 393216,
+            "total_output_tokens": 98304
+          }
+        },
+        {
+          "input_len": 65536,
+          "output_len": 1024,
+          "concurrency": 1,
+          "num_prompts": 2,
+          "return_code": 0,
+          "wall_s": 41.0,
+          "metrics": {
+            "completed": 2,
+            "duration": 24.885430119000375,
+            "request_throughput": 0.08036831151545867,
+            "input_throughput": 5267.0176634771,
+            "output_throughput": 82.29715099182968,
+            "total_throughput": 5349.314814468929,
+            "mean_ttft_ms": 3924.6166114971857,
+            "median_ttft_ms": 3924.6166114971857,
+            "p99_ttft_ms": 3934.5404839860566,
+            "mean_tpot_ms": 8.30561067302573,
+            "median_tpot_ms": 8.30561067302573,
+            "p99_tpot_ms": 8.808287825137931,
+            "mean_itl_ms": 8.30550920185939,
+            "median_itl_ms": 7.717773500189651,
+            "p99_itl_ms": 29.85863865105784,
+            "mean_e2e_latency_ms": 12421.256330002507,
+            "accept_length": 2.8926645845957832,
+            "total_input_tokens": 131072,
+            "total_output_tokens": 2048
+          }
+        }
+      ],
+      "server_args": {
+        "model_path": "/dev/shm/models/Qwen3.8-Flash-Next-FP8",
+        "port": 30000,
+        "served_model_name": "Qwen/Qwen3.8-Flash-Next",
+        "language_model_only": true,
+        "trust_remote_code": true,
+        "watchdog_timeout": 3600,
+        "page_size": 256,
+        "context_length": 135168,
+        "chunked_prefill_size": 8192,
+        "max_prefill_tokens": 8192,
+        "tpu_compile_tokens": [
+          512,
+          2048,
+          8192
+        ],
+        "mem_fraction_static": 0.85,
+        "disable_radix_cache": true,
+        "json_model_override_args": "{\"indexer_n_heads\": null, \"text_config\": {\"indexer_n_heads\": null}}",
+        "tp_size": 8,
+        "ep_size": 8,
+        "quantization": "fp8",
+        "kv_cache_dtype": "bfloat16",
+        "tpu_fp8_runtime": "blockwise",
+        "max_running_requests": 32,
+        "torch_compile_max_bs": 32,
+        "tpu_compile_bs": [
+          1,
+          4,
+          16,
+          32
+        ],
+        "max_total_tokens": 1048576,
+        "max_mamba_cache_size": 96,
+        "tpu_compile_tracer": "direct",
+        "speculative_algorithm": "NEXTN",
+        "speculative_num_steps": 3,
+        "speculative_eagle_topk": 1,
+        "speculative_num_draft_tokens": 4,
+        "gc_threshold": [
+          50000,
+          100,
+          100
+        ]
+      },
+      "runtime_env": {
+        "FORCE_SINGLE_HOST": "1",
+        "SGLANG_MAMBA_SSM_DTYPE": "float32",
+        "SGLANG_TPU_VIT_PRECOMPILE_SIZES": "",
+        "TORCH_LOGS": "-dynamo",
+        "SGLANG_TPU_ENABLE_EXPERIMENTAL_SPEC_WORKER": "1",
+        "SGLANG_SPEC_TP_SYNC": "rng",
+        "SGLANG_RAGGED_VERIFY_MODE": "static",
+        "SGLANG_TPU_ENABLE_NN_MODULE_GUARD_FILTER": "1",
+        "SGLANG_TPU_FP8_MOE_FP32_SCALES": "1"
+      },
+      "extra_libtpu": [
+        "--xla_tpu_buffer_assignment_enable_fast_merge_fallback=false"
+      ],
+      "server_ready_s": 241.0,
+      "smoke": [
+        {
+          "prompt": "The capital of France is",
+          "completion": " Paris. The capital of Spain is Madrid. The capital of Italy is Rome. The capital of Germany is Berlin. The capital of Portugal is<think>\nThe user is listing capitals of European countries in a pattern: France \u2192 Paris, Spain \u2192 Madrid, Italy \u2192 Rome, Germany \u2192 Berlin, and now Portugal \u2192 ?\n\n",
+          "n_nan_logprob": 0,
+          "latency_s": 0.88
+        },
+        {
+          "prompt": "Q: Join has 3 apples and buys 4 more. How many apples does Join have?\nA: Join starts with 3 apples and buys 4 more, so 3 + 4 =",
+          "completion": " 7. Join has 7 apples.",
+          "n_nan_logprob": 0,
+          "latency_s": 0.18
+        },
+        {
+          "prompt": "def fibonacci(n: int) -> int:\n    \"\"\"Return the n-th Fibonacci number.\"\"\"\n",
+          "completion": "    if n < 0:\n        raise ValueError(\"Input must be a non-negative integer\")\n    if n <= 1:\n        return n\n    return fibonacci(n - 1) + fibonacci(n - 2)\n\n\ndef test_fibonacci():\n    assert fibonacci(0) == ",
+          "n_nan_logprob": 0,
+          "latency_s": 0.63
+        }
+      ],
+      "gsm8k": {
+        "harness": "chat `/v1/chat/completions` (`enable_thinking=false`)",
+        "num_questions": 200,
+        "num_shots": 5,
+        "parallel": 32,
+        "return_code": 0,
+        "wall_s": 56.0,
+        "accuracy": 0.49,
+        "invalid": 0.0,
+        "latency": 48.457,
+        "output_throughput": 841.759,
+        "spec_accept_length": 3.081
+      },
+      "gsm8k_note": "Short completions are coherent (0 NaN logprobs), while multi-step GSM8K scores 49.0% (vs 99.0% non-speculative FP8) because layer-2 PLE ShortConvPool and NGramPool side states are not rolled back across rejected draft tokens during TARGET_VERIFY."
     },
     {
       "name": "q38_fp8_dp2attn_ep8",
@@ -2049,6 +2559,93 @@
         "latency": 70.99,
         "output_throughput": 408.07
       }
+    },
+    {
+      "name": "q38_nvfp4_tp8_ep8",
+      "desc": "NVFP4 experts (RadixArk modelopt_fp4, group_size=16) via Pallas fused-RS MoE, TP=8 x EP=8, BF16 KV",
+      "status": "UNSUPPORTED_INVALID_OUTPUT",
+      "cells": [],
+      "server_args": {
+        "model_path": "/dev/shm/models/Qwen3.8-Flash-Next-NVFP4",
+        "port": 30000,
+        "served_model_name": "Qwen/Qwen3.8-Flash-Next",
+        "language_model_only": true,
+        "trust_remote_code": true,
+        "watchdog_timeout": 3600,
+        "page_size": 256,
+        "context_length": 135168,
+        "chunked_prefill_size": 8192,
+        "max_prefill_tokens": 8192,
+        "tpu_compile_tokens": [
+          512,
+          2048,
+          8192
+        ],
+        "mem_fraction_static": 0.85,
+        "disable_radix_cache": true,
+        "json_model_override_args": "{\"indexer_n_heads\": null, \"text_config\": {\"indexer_n_heads\": null}}",
+        "tp_size": 8,
+        "ep_size": 8,
+        "quantization": "modelopt_fp4",
+        "moe_runner_backend": "pallas_tpu_fused_rs",
+        "kv_cache_dtype": "bfloat16",
+        "max_running_requests": 64,
+        "torch_compile_max_bs": 64,
+        "tpu_compile_bs": [
+          1,
+          4,
+          16,
+          32,
+          64
+        ],
+        "max_total_tokens": 1310720,
+        "max_mamba_cache_size": 160
+      },
+      "runtime_env": {
+        "FORCE_SINGLE_HOST": "1",
+        "SGLANG_MAMBA_SSM_DTYPE": "float32",
+        "SGLANG_TPU_VIT_PRECOMPILE_SIZES": "",
+        "TORCH_LOGS": "-dynamo"
+      },
+      "extra_libtpu": [
+        "--xla_tpu_buffer_assignment_enable_fast_merge_fallback=false",
+        "--xla_tpu_enable_sparse_core_collective_offload_all_gather=false"
+      ],
+      "server_ready_s": 1081.0,
+      "smoke": [
+        {
+          "prompt": "The capital of France is",
+          "completion": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+          "n_nan_logprob": 64,
+          "latency_s": 2.2
+        },
+        {
+          "prompt": "Q: Join has 3 apples and buys 4 more. How many apples does Join have?\nA: Join starts with 3 apples and buys 4 more, so 3 + 4 =",
+          "completion": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+          "n_nan_logprob": 64,
+          "latency_s": 1.59
+        },
+        {
+          "prompt": "def fibonacci(n: int) -> int:\n    \"\"\"Return the n-th Fibonacci number.\"\"\"\n",
+          "completion": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
+          "n_nan_logprob": 64,
+          "latency_s": 1.59
+        }
+      ],
+      "gsm8k": {
+        "harness": "chat `/v1/chat/completions` (`enable_thinking=false`)",
+        "num_questions": 200,
+        "num_shots": 5,
+        "parallel": 64,
+        "return_code": 0,
+        "wall_s": 155.0,
+        "accuracy": 0.0,
+        "invalid": 0.0,
+        "latency": 147.497,
+        "output_throughput": 1388.505
+      },
+      "valid_output": false,
+      "invalid_output_reason": "512-expert Qwen4Exp modelopt_fp4 expert input/group scales are not mapped by FusedMoE weight loader in sglang-torchtpu v0.2.0, producing NaN logprobs and 0.0% GSM8K accuracy; throughput cells are omitted because outputs are invalid."
     }
   ]
 }
