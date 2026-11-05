@@ -1,10 +1,10 @@
 # `Qwen3.8-Flash-Next` Serving on Cloud TPU `v7x` with SGLang-TorchTPU
 
-Single-host serving recipes, precision comparisons (`FP8` blockwise vs `BF16`, plus `NVFP4` evaluation), parallelism ablations (`TP=8 × EP=8`, `TP=8 × EP=1`, `DP=2 dp-attention × EP=8`), speculative decoding (`MTP` / `NEXTN`), 5-shot `GSM8K` quality evaluations, and long-context (`64K` & `128K`) benchmarks for **`Qwen3.8-Flash-Next`** (`Qwen4ExpForConditionalGeneration`) on one **Cloud TPU `v7x` host** (`2x2x2` topology, `4` physical chips = `8` TensorCore ranks, `768 GB` HBM) using **SGLang-TorchTPU `v0.2.0`**.
+Single-host serving recipes, precision comparisons (`FP8` blockwise vs `BF16`, plus `NVFP4` and `MTP` evaluations), parallelism ablations (`TP=8 × EP=8`, `TP=8 × EP=1`, `DP=2 dp-attention × EP=8`), 5-shot `GSM8K` quality evaluations, and long-context (`64K` & `128K`) benchmarks for **`Qwen3.8-Flash-Next`** (`Qwen4ExpForConditionalGeneration`) on one **Cloud TPU `v7x` host** (`2x2x2` topology, `4` physical chips = `8` TensorCore ranks, `768 GB` HBM) using **SGLang-TorchTPU `v0.2.0`**.
 
 Full per-cell tables: [`results/SUMMARY.md`](./results/SUMMARY.md) · machine-readable telemetry: [`results/summary.json`](./results/summary.json).
 
-**Conventions:** `c` = concurrent requests; `TTFT` = time to first token and `TPOT` = time per output token (both p50 unless stated); `MTP Accept Len` = mean tokens accepted per target verification step; `Chips` = physical TPU `v7x` chips (`4` chips = `8` TensorCores). Every request decodes the exact stated output token count (`EOS` ignored).
+**Conventions:** `c` = concurrent requests; `TTFT` = time to first token and `TPOT` = time per output token (both p50 unless stated); `Chips` = physical TPU `v7x` chips (`4` chips = `8` TensorCores). Every request decodes the exact stated output token count (`EOS` ignored). Only output-verified configurations are reported in throughput tables.
 
 | Attribute | Specification |
 |---|---|
@@ -21,25 +21,24 @@ Full per-cell tables: [`results/SUMMARY.md`](./results/SUMMARY.md) · machine-re
 
 ### 1.1 Interactive & Batch Serving (`1024` in / `1024` out, EOS ignored)
 
-| Variant | Precision & Topology | 5-Shot Chat GSM8K | `c=1`: Out tok/s (`TPOT p50`) | `c=4` | `c=16` | `c=32` | `c=64` Peak (`tok/s/chip`) | MTP Accept Len |
-|---|---|---:|---:|---:|---:|---:|---:|---:|
-| **`q38_fp8_tp8_ep8`** | `FP8` W8A8 (`128×128` blockwise), `TP=8 × EP=8`, `BF16` KV | **99.0%**¹ | **41.5** (`23.97 ms`) | 159.2 (`24.80 ms`) | 543.7 (`28.63 ms`) | 963.3 (`31.91 ms`) | **1,301.4** (`325.4`/chip, `38.73 ms`) | — |
-| **`q38_fp8_tp8_ep8_mtp3`**† | `FP8` W8A8 blockwise, `TP=8 × EP=8`, `BF16` KV + **`MTP-3` (`NEXTN`, greedy)** | 49.0%† | **85.3** (`11.53 ms`) | **298.1** (`12.40 ms`) | **856.2** (`16.24 ms`) | **1,387.5** (`346.9`/chip, `18.63 ms`) | — (`mrr=32`) | **2.83 – 3.03** |
-| **`q38_fp8_dp2attn_ep8`** | `FP8` W8A8 blockwise, `TP=8 × DP=2` (`dp-attention` + `DP` LM head) `× EP=8`, `BF16` KV | **99.0%** | 30.8 (`32.25 ms`) | 121.2 (`32.69 ms`) | 435.1 (`35.98 ms`) | 758.0 (`40.67 ms`) | **1,273.4** (`318.4`/chip, `46.97 ms`) | — |
-| **`q38_bf16_tp8_ep8`** | `BF16` unquantized weights + `BF16` KV, `TP=8 × EP=8` | **98.5%** | 35.9 (`27.70 ms`) | 135.8 (`28.96 ms`) | 475.7 (`33.07 ms`) | 870.5 (`35.63 ms`) | **1,194.2** (`298.5`/chip, `41.76 ms`) | — |
-| **`q38_bf16_tp8_ep1`** | `BF16` unquantized weights + `BF16` KV, `TP=8 × EP=1` (`80→128` `gmm_v2` pad) | **98.5%** | 34.9 (`28.45 ms`) | 131.1 (`29.79 ms`) | 417.4 (`37.25 ms`) | 708.8 (`43.23 ms`) | **946.7** (`236.7`/chip, `54.68 ms`) | — |
-| *`q38_nvfp4_tp8_ep8`* | *`NVFP4` (`modelopt_fp4`, `group_size=16`), `TP=8 × EP=8`, `BF16` KV* | *0.0% (`NaN`)*² | — | — | — | — | — | — |
+| Variant | Precision & Topology | 5-Shot Chat GSM8K | `c=1`: Out tok/s (`TPOT p50`) | `c=4` | `c=16` | `c=32` | `c=64` Peak (`tok/s/chip`) |
+|---|---|---:|---:|---:|---:|---:|---:|
+| **`q38_fp8_tp8_ep8`** | `FP8` W8A8 (`128×128` blockwise), `TP=8 × EP=8`, `BF16` KV | **99.0%**¹ | **41.5** (`23.97 ms`) | **159.2** (`24.80 ms`) | **543.7** (`28.63 ms`) | **963.3** (`31.91 ms`) | **1,301.4** (`325.4`/chip, `38.73 ms`) |
+| **`q38_fp8_dp2attn_ep8`** | `FP8` W8A8 blockwise, `TP=8 × DP=2` (`dp-attention` + `DP` LM head) `× EP=8`, `BF16` KV | **99.0%** | 30.8 (`32.25 ms`) | 121.2 (`32.69 ms`) | 435.1 (`35.98 ms`) | 758.0 (`40.67 ms`) | **1,273.4** (`318.4`/chip, `46.97 ms`) |
+| **`q38_bf16_tp8_ep8`** | `BF16` unquantized weights + `BF16` KV, `TP=8 × EP=8` | **98.5%** | 35.9 (`27.70 ms`) | 135.8 (`28.96 ms`) | 475.7 (`33.07 ms`) | 870.5 (`35.63 ms`) | **1,194.2** (`298.5`/chip, `41.76 ms`) |
+| **`q38_bf16_tp8_ep1`** | `BF16` unquantized weights + `BF16` KV, `TP=8 × EP=1` (`80→128` `gmm_v2` pad) | **98.5%** | 34.9 (`28.45 ms`) | 131.1 (`29.79 ms`) | 417.4 (`37.25 ms`) | 708.8 (`43.23 ms`) | **946.7** (`236.7`/chip, `54.68 ms`) |
+| *`q38_fp8_tp8_ep8_mtp3`* | *`FP8` W8A8 blockwise, `TP=8 × EP=8`, `BF16` KV + `MTP-3` (`NEXTN`)* | *49.0%*² | — | — | — | — | — |
+| *`q38_nvfp4_tp8_ep8`* | *`NVFP4` (`modelopt_fp4`, `group_size=16`), `TP=8 × EP=8`, `BF16` KV* | *0.0% (`NaN`)*³ | — | — | — | — | — |
 
 ¹ Blockwise `FP8` Chat-API `GSM8K` (`enable_thinking=false`) is **`99.0%`** (`198/200`, measured on `q38_fp8_dp2attn_ep8`); the initial `q38_fp8_tp8_ep8` run used SGLang's legacy raw `/generate` script (`stop=["Question"]` without `enable_thinking=false`), which truncated `65.0%` of Chain-of-Thought responses (Section 2).
-† `q38_fp8_tp8_ep8_mtp3` uses greedy decoding (`temperature=0`) on synthetic prompts and `max_running_requests=32`. Short completions pass greedy smoke checks (`0` NaN logprobs), but 5-shot `GSM8K` drops to `49.0%` because layer-2 PLE `ShortConvPool` and `NGramPool` side states are not rolled back across rejected draft tokens during `TARGET_VERIFY` ([Supported Configurations & Known Limitations](#known-limitations)).
-² `RadixArk/Qwen3.8-Flash-Next-NVFP4` (`modelopt_fp4`) produces `NaN` logprobs (`0.0%` GSM8K) in `sglang-torchtpu v0.2.0` due to unmapped `512`-expert `Qwen4Exp` `modelopt_fp4` scales; invalid throughput numbers are not reported ([Supported Configurations & Known Limitations](#known-limitations)).
+² MTP-3 speculative decoding is not yet output-equivalent on this stack (5-shot GSM8K `49.0%` vs `99.0%` without MTP) because PLE `ShortConvPool`/`NGramPool` state is not rolled back on rejected draft tokens; throughput is not reported until this is resolved ([Supported Configurations & Known Limitations](#known-limitations)).
+³ `RadixArk/Qwen3.8-Flash-Next-NVFP4` (`modelopt_fp4`) produces `NaN` logprobs (`0.0%` GSM8K) in `sglang-torchtpu v0.2.0` due to unmapped `512`-expert `Qwen4Exp` `modelopt_fp4` scales; throughput is not reported ([Supported Configurations & Known Limitations](#known-limitations)).
 
 ### 1.2 Long-Context Scaling (`4K` → `128K` Input Tokens, Radix Cache Off)
 
 | Variant | `4096` / `1024` (`c=1` / Peak) | `65536` (`64K`) / `1024` (`c=1` / Peak) | `131072` (`128K`) / `512` (`c=1` / Peak) |
 |---|---|---|---|
-| **`q38_fp8_tp8_ep8`** | `41.1` (`24.08 ms`) / **`1,050.8`** (`c=64`, `5,254` tot tok/s) | `35.5` (`24.42 ms`, TTFT `3.87 s`) / **`139.2`** (`c=8`, `9,050` tot tok/s) | **`24.5`** (`24.80 ms`, TTFT `8.21 s`) / **`44.2`** (`c=4`, **`11,348` tot tok/s**) |
-| **`q38_fp8_tp8_ep8_mtp3`**† | **`103.2`** (`9.29 ms`, acc `2.84`) / **`1,043.6`** (`c=32`, `25.22 ms`, acc `2.89`) | **`82.3`** (`8.31 ms` TPOT, TTFT `3.92 s`, acc `2.89`, `5,349` tot tok/s) / — | — |
+| **`q38_fp8_tp8_ep8`** | **`41.1`** (`24.08 ms`) / **`1,050.8`** (`c=64`, `5,254` tot tok/s) | **`35.5`** (`24.42 ms`, TTFT `3.87 s`) / **`139.2`** (`c=8`, `9,050` tot tok/s) | **`24.5`** (`24.80 ms`, TTFT `8.21 s`) / **`44.2`** (`c=4`, **`11,348` tot tok/s**) |
 | **`q38_fp8_dp2attn_ep8`** | `30.3` (`32.28 ms`) / **`961.4`** (`c=64`, `4,807` tot tok/s) | `23.0` (`32.63 ms`, TTFT `11.16 s`) / **`70.3`** (`c=4`, `4,570` tot tok/s) | — |
 | **`q38_bf16_tp8_ep8`** | `35.5` (`27.72 ms`) / **`979.7`** (`c=64`, `4,899` tot tok/s) | `31.5` (`28.08 ms`, TTFT `3.81 s`) / **`88.9`** (`c=4`, `5,779` tot tok/s) | **`22.6`** (`28.46 ms`, TTFT `8.11 s`, `5,804` tot tok/s) / — |
 | **`q38_bf16_tp8_ep1`** | `34.3` (`28.48 ms`) / **`758.1`** (`c=64`, `3,791` tot tok/s) | `29.2` (`28.84 ms`, TTFT `5.52 s`, `1,900` tot tok/s) / — | **`19.3`** (`29.22 ms`, TTFT `11.51 s`, `4,973` tot tok/s) / — |
@@ -54,95 +53,82 @@ Full per-cell tables: [`results/SUMMARY.md`](./results/SUMMARY.md) · machine-re
    - Both `q38_bf16_tp8_ep8` and `q38_bf16_tp8_ep1` reach identical **`98.5%` `GSM8K` accuracy** (`197/200`). Because `Qwen3.8-Flash-Next` uses `moe_intermediate_size=640`, sharding each expert across `TP=8` (`EP=1`) produces `80` channels/rank, which Pallas `gmm_v2` pads `1.6×` to `128` lanes across all `512` experts; `EP=8` keeps `64` whole experts per rank at unpadded `640` width and delivers **`+26.1%` higher `1K/1K c=64` throughput** (`1,194.2` vs `946.7` tok/s) and **`+29.2%` higher `4K/1K c=64` throughput** (`979.7` vs `758.1` tok/s).
 4. **`DP=2` Attention Data Parallelism (`q38_fp8_dp2attn_ep8`) Converges Within `2.2%` of Pure `TP=8` at `c=64`:**
    - Partitioning attention into `2 × attn-TP=4` with a `DP` LM head (`--dp-size 2 --enable-dp-attention --enable-dp-lm-head`) introduces extra collective transitions across the `48` hybrid layers at low concurrency (`30.8` vs `41.5` tok/s at `c=1`), and reaches **`1,273.4` out tok/s at `1K/1K c=64`** (`97.8%` of `TP=8`).
-5. **Greedy `MTP-3` (`NEXTN`) Speculative Decoding Speedups (`1.44×`–`2.51×`) and Long-Generation PLE State Caveat:**
-   - With `speculative_num_steps=3, topk=1, num_draft_tokens=4` (greedy), mean acceptance is **`2.83 – 3.03` tokens/verify step**, boosting `c=1` output throughput **`2.05×` at `1K`** (`41.5` → **`85.3` tok/s**, `11.53 ms` TPOT), **`2.51×` at `4K`** (`41.1` → **`103.2` tok/s**, `9.29 ms` TPOT), and **`2.32×` at `64K`** (`35.5` → **`82.3` tok/s**, `8.31 ms` TPOT), while reaching **`1,387.5` out tok/s at `1K/1K c=32`** (**`1.44×`** over `c=32` non-speculative `963.3` tok/s). However, 5-shot `GSM8K` drops from `99.0%` to **`49.0%`** because PLE `ShortConvPool`/`NGramPool` states are not rolled back across rejected draft tokens during `TARGET_VERIFY` ([Supported Configurations & Known Limitations](#known-limitations)).
 
 ---
 
-## 2. Few-Shot `GSM8K` Quality & Speculative Acceptance
+## 2. Few-Shot `GSM8K` Quality Gate
 
 5-shot greedy `GSM8K` (`200` questions, `max_new_tokens=1024`) run directly against each live TPU server:
 
-| Variant | Precision & Parallelism | Harness | Questions | Accuracy | Invalid | GSM8K Out tok/s | Latency (s) | MTP Accept Len |
-|---|---|---|---:|---:|---:|---:|---:|---:|
-| `q38_fp8_tp8_ep8` | FP8 W8A8 (128×128 blockwise), TP=8 × EP=8, BF16 KV | raw `/generate` (`stop=["Question"]`) | 200 | **17.0%**¹ | 65.0% | 581.6 | 31.96 | — |
-| `q38_fp8_dp2attn_ep8` | FP8 W8A8 (blockwise), TP=8 × DP=2 (`dp-attention`) × EP=8, BF16 KV | chat `/v1/chat/completions` (`enable_thinking=false`) | 200 | **99.0%** | 0.0% | 288.1 | 100.04 | — |
-| `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 × EP=8 | chat `/v1/chat/completions` (`enable_thinking=false`) | 200 | **98.5%** | 0.0% | 498.4 | 58.48 | — |
-| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 × EP=1 (`80→128` pad) | chat `/v1/chat/completions` (`enable_thinking=false`) | 200 | **98.5%** | 0.0% | 408.1 | 70.99 | — |
-| `q38_fp8_tp8_ep8_mtp3` | FP8 W8A8 (blockwise), TP=8 × EP=8, BF16 KV + MTP-3 (`NEXTN`) | chat `/v1/chat/completions` (`enable_thinking=false`) | 200 | **49.0%**† | 0.0% | 841.8 | 48.46 | 3.08 |
-| `q38_nvfp4_tp8_ep8` | NVFP4 (`modelopt_fp4`, `group_size=16`), TP=8 × EP=8, BF16 KV | chat `/v1/chat/completions` (`enable_thinking=false`) | 200 | **0.0%** (`NaN`)² | 0.0% | — | — | — |
+| Variant | Precision & Parallelism | Harness | Questions | Accuracy | Invalid | GSM8K Out tok/s | Latency (s) |
+|---|---|---|---:|---:|---:|---:|---:|
+| `q38_fp8_tp8_ep8` | FP8 W8A8 (128×128 blockwise), TP=8 × EP=8, BF16 KV | raw `/generate` (`stop=["Question"]`) | 200 | **17.0%**¹ | 65.0% | 581.6 | 31.96 |
+| `q38_fp8_dp2attn_ep8` | FP8 W8A8 (blockwise), TP=8 × DP=2 (`dp-attention`) × EP=8, BF16 KV | chat `/v1/chat/completions` (`enable_thinking=false`) | 200 | **99.0%** | 0.0% | 288.1 | 100.04 |
+| `q38_bf16_tp8_ep8` | BF16 unquantized weights + BF16 KV, TP=8 × EP=8 | chat `/v1/chat/completions` (`enable_thinking=false`) | 200 | **98.5%** | 0.0% | 498.4 | 58.48 |
+| `q38_bf16_tp8_ep1` | BF16 unquantized weights + BF16 KV, TP=8 × EP=1 (`80→128` pad) | chat `/v1/chat/completions` (`enable_thinking=false`) | 200 | **98.5%** | 0.0% | 408.1 | 70.99 |
+| `q38_fp8_tp8_ep8_mtp3` | FP8 W8A8 (blockwise), TP=8 × EP=8, BF16 KV + MTP-3 (`NEXTN`) | chat `/v1/chat/completions` (`enable_thinking=false`) | 200 | 49.0% (not output-equivalent)² | 0.0% | — | — |
+| `q38_nvfp4_tp8_ep8` | NVFP4 (`modelopt_fp4`, `group_size=16`), TP=8 × EP=8, BF16 KV | chat `/v1/chat/completions` (`enable_thinking=false`) | 200 | 0.0% (`NaN`)³ | 0.0% | — | — |
 
 ¹ On thinking-capable `Qwen3.8-Flash-Next` checkpoints, SGLang's raw-completion `few_shot_gsm8k` client sends `stop=["Question"]` without chat templating (`enable_thinking=false`), truncating Chain-of-Thought output whenever the model emits `Question` (`65.0%` unparsed `invalid`). Evaluating via `/v1/chat/completions` with `enable_thinking=false` resolves this (`99.0%` on `FP8`, `98.5%` on `BF16`, `0.0%` invalid).
-† See [Supported Configurations & Known Limitations](#known-limitations) on `MTP-3` PLE verify state rollback.
-² `NVFP4` outputs are `NaN` logprobs; throughput is not reported.
+² MTP-3 speculative decoding is not yet output-equivalent on this stack (5-shot GSM8K `49.0%` vs `99.0%` without MTP) because PLE `ShortConvPool`/`NGramPool` state is not rolled back on rejected draft tokens; throughput is not reported until this is resolved.
+³ `NVFP4` outputs are `NaN` logprobs; throughput is not reported.
 
 ---
 
 ## 3. Serving Throughput, Latency & Long-Context Benchmarks
 
-Fixed-length ShareGPT-sampled requests (`--dataset-name random --random-range-ratio 1.0`, greedy, `EOS` ignored, radix cache disabled) on one TPU `v7x` host (`4` chips = `8` TensorCores):
+Fixed-length ShareGPT-sampled requests (`--dataset-name random --random-range-ratio 1.0`, greedy, `EOS` ignored, radix cache disabled) on one TPU `v7x` host (`4` chips = `8` TensorCores) across the four output-verified configurations:
 
-| Variant | Layout / Precision | In / Out | Conc. | Out tok/s | Out tok/s/chip | Total tok/s | TTFT p50 / p99 (ms) | TPOT p50 / p99 (ms) | MTP Accept | vs `FP8 TP8 EP8` |
-|---|---|---|---:|---:|---:|---:|---|---|---:|---:|
-| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `1024` / `1024` | 1 | **41.5** | 10.4 | 83.0 | 128 / 144 | 23.97 / 24.05 | — | 1.00x |
-| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `1024` / `1024` | 4 | **159.2** | 39.8 | 318.5 | 280 / 359 | 24.80 / 25.14 | — | 1.00x |
-| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `1024` / `1024` | 16 | **543.7** | 135.9 | 1,087.3 | 923 / 1,005 | 28.63 / 29.29 | — | 1.00x |
-| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `1024` / `1024` | 32 | **963.3** | 240.8 | 1,926.6 | 1,363 / 1,927 | 31.91 / 32.79 | — | 1.00x |
-| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `1024` / `1024` | 64 | **1,301.4** | 325.4 | 2,602.9 | 2,238 / 7,173 | 38.73 / 40.47 | — | 1.00x |
-| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `4096` / `1024` | 1 | **41.1** | 10.3 | 205.5 | 279 / 281 | 24.08 / 24.09 | — | 1.00x |
-| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `4096` / `1024` | 4 | **155.2** | 38.8 | 776.0 | 710 / 945 | 25.10 / 25.51 | — | 1.00x |
-| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `4096` / `1024` | 16 | **495.7** | 123.9 | 2,478.7 | 2,254 / 3,635 | 30.17 / 31.93 | — | 1.00x |
-| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `4096` / `1024` | 32 | **818.6** | 204.7 | 4,093.2 | 4,137 / 7,245 | 34.97 / 38.86 | — | 1.00x |
-| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `4096` / `1024` | 64 | **1,050.8** | 262.7 | 5,254.0 | 8,892 / 17,896 | 43.89 / 52.14 | — | 1.00x |
-| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `65536` / `1024` | 1 | **35.5** | 8.9 | 2,304.8 | 3,874 / 3,886 | 24.42 / 24.42 | — | 1.00x |
-| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `65536` / `1024` | 4 | **97.4** | 24.4 | 6,334.2 | 9,514 / 15,140 | 31.77 / 37.30 | — | 1.00x |
-| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `65536` / `1024` | 8 | **139.2** | 34.8 | 9,050.2 | 17,026 / 30,179 | 40.85 / 53.71 | — | 1.00x |
-| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `131072` / `512` | 1 | **24.5** | 6.1 | 6,294.6 | 8,212 / 8,234 | 24.80 / 24.80 | — | 1.00x |
-| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `131072` / `512` | 4 | **44.2** | 11.0 | 11,348.2 | 20,226 / 32,212 | 51.16 / 74.73 | — | 1.00x |
-| `q38_fp8_tp8_ep8_mtp3`† | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV + MTP-3 (greedy) | `1024` / `1024` | 1 | **85.3** | 21.3 | 170.6 | 172 / 177 | 11.53 / 14.62 | 3.03 | 2.05x |
-| `q38_fp8_tp8_ep8_mtp3`† | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV + MTP-3 (greedy) | `1024` / `1024` | 4 | **298.1** | 74.5 | 596.1 | 206 / 608 | 12.40 / 14.65 | 2.96 | 1.87x |
-| `q38_fp8_tp8_ep8_mtp3`† | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV + MTP-3 (greedy) | `1024` / `1024` | 16 | **856.2** | 214.0 | 1,712.4 | 223 / 1,123 | 16.24 / 27.32 | 2.85 | 1.57x |
-| `q38_fp8_tp8_ep8_mtp3`† | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV + MTP-3 (greedy) | `1024` / `1024` | 32 | **1,387.5** | 346.9 | 2,774.9 | 283 / 1,991 | 18.63 / 32.95 | 2.83 | 1.44x |
-| `q38_fp8_tp8_ep8_mtp3`† | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV + MTP-3 (greedy) | `4096` / `1024` | 1 | **103.2** | 25.8 | 516.0 | 484 / 486 | 9.29 / 10.36 | 2.84 | 2.51x |
-| `q38_fp8_tp8_ep8_mtp3`† | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV + MTP-3 (greedy) | `4096` / `1024` | 4 | **283.8** | 71.0 | 1,419.0 | 518 / 1,320 | 12.23 / 16.60 | 2.85 | 1.83x |
-| `q38_fp8_tp8_ep8_mtp3`† | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV + MTP-3 (greedy) | `4096` / `1024` | 16 | **729.0** | 182.3 | 3,645.1 | 533 / 4,092 | 18.41 / 26.11 | 2.87 | 1.47x |
-| `q38_fp8_tp8_ep8_mtp3`† | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV + MTP-3 (greedy) | `4096` / `1024` | 32 | **1,043.6** | 260.9 | 5,218.0 | 601 / 7,714 | 25.22 / 42.48 | 2.89 | 1.27x |
-| `q38_fp8_tp8_ep8_mtp3`† | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV + MTP-3 (greedy) | `65536` / `1024` | 1 | **82.3** | 20.6 | 5,349.3 | 3,925 / 3,935 | 8.31 / 8.81 | 2.89 | 2.32x |
-| `q38_fp8_dp2attn_ep8` | FP8 W8A8 blockwise, TP=8 × DP=2 dp-attn × EP=8, BF16 KV | `1024` / `1024` | 1 | **30.8** | 7.7 | 61.6 | 259 / 310 | 32.25 / 32.26 | — | 0.74x |
-| `q38_fp8_dp2attn_ep8` | FP8 W8A8 blockwise, TP=8 × DP=2 dp-attn × EP=8, BF16 KV | `1024` / `1024` | 4 | **121.2** | 30.3 | 242.3 | 299 / 434 | 32.69 / 32.86 | — | 0.76x |
-| `q38_fp8_dp2attn_ep8` | FP8 W8A8 blockwise, TP=8 × DP=2 dp-attn × EP=8, BF16 KV | `1024` / `1024` | 16 | **435.1** | 108.8 | 870.3 | 897 / 1,563 | 35.98 / 36.36 | — | 0.80x |
-| `q38_fp8_dp2attn_ep8` | FP8 W8A8 blockwise, TP=8 × DP=2 dp-attn × EP=8, BF16 KV | `1024` / `1024` | 32 | **758.0** | 189.5 | 1,516.1 | 1,561 / 3,165 | 40.67 / 41.74 | — | 0.79x |
-| `q38_fp8_dp2attn_ep8` | FP8 W8A8 blockwise, TP=8 × DP=2 dp-attn × EP=8, BF16 KV | `1024` / `1024` | 64 | **1,273.4** | 318.4 | 2,546.8 | 3,357 / 5,700 | 46.97 / 49.60 | — | 0.98x |
-| `q38_fp8_dp2attn_ep8` | FP8 W8A8 blockwise, TP=8 × DP=2 dp-attn × EP=8, BF16 KV | `4096` / `1024` | 1 | **30.3** | 7.6 | 151.6 | 715 / 769 | 32.28 / 32.29 | — | 0.74x |
-| `q38_fp8_dp2attn_ep8` | FP8 W8A8 blockwise, TP=8 × DP=2 dp-attn × EP=8, BF16 KV | `4096` / `1024` | 16 | **390.6** | 97.7 | 1,953.1 | 3,358 / 5,765 | 38.04 / 40.45 | — | 0.79x |
-| `q38_fp8_dp2attn_ep8` | FP8 W8A8 blockwise, TP=8 × DP=2 dp-attn × EP=8, BF16 KV | `4096` / `1024` | 64 | **961.4** | 240.4 | 4,807.0 | 11,990 / 21,544 | 55.15 / 65.85 | — | 0.91x |
-| `q38_fp8_dp2attn_ep8` | FP8 W8A8 blockwise, TP=8 × DP=2 dp-attn × EP=8, BF16 KV | `65536` / `1024` | 1 | **23.0** | 5.7 | 1,493.6 | 11,157 / 11,171 | 32.63 / 32.63 | — | 0.65x |
-| `q38_fp8_dp2attn_ep8` | FP8 W8A8 blockwise, TP=8 × DP=2 dp-attn × EP=8, BF16 KV | `65536` / `1024` | 4 | **70.3** | 17.6 | 4,570.0 | 17,679 / 24,412 | 39.89 / 46.31 | — | 0.72x |
-| `q38_bf16_tp8_ep8` | BF16 weights + BF16 KV, TP=8 × EP=8 | `1024` / `1024` | 1 | **35.9** | 9.0 | 71.8 | 179 / 181 | 27.70 / 27.71 | — | 0.86x |
-| `q38_bf16_tp8_ep8` | BF16 weights + BF16 KV, TP=8 × EP=8 | `1024` / `1024` | 4 | **135.8** | 34.0 | 271.6 | 484 / 595 | 28.96 / 29.33 | — | 0.85x |
-| `q38_bf16_tp8_ep8` | BF16 weights + BF16 KV, TP=8 × EP=8 | `1024` / `1024` | 16 | **475.7** | 118.9 | 951.5 | 598 / 1,034 | 33.07 / 33.42 | — | 0.88x |
-| `q38_bf16_tp8_ep8` | BF16 weights + BF16 KV, TP=8 × EP=8 | `1024` / `1024` | 32 | **870.5** | 217.6 | 1,741.0 | 1,191 / 1,907 | 35.63 / 36.33 | — | 0.90x |
-| `q38_bf16_tp8_ep8` | BF16 weights + BF16 KV, TP=8 × EP=8 | `1024` / `1024` | 64 | **1,194.2** | 298.5 | 2,388.3 | 2,212 / 7,700 | 41.76 / 43.68 | — | 0.92x |
-| `q38_bf16_tp8_ep8` | BF16 weights + BF16 KV, TP=8 × EP=8 | `4096` / `1024` | 1 | **35.5** | 8.9 | 177.4 | 486 / 490 | 27.72 / 27.74 | — | 0.86x |
-| `q38_bf16_tp8_ep8` | BF16 weights + BF16 KV, TP=8 × EP=8 | `4096` / `1024` | 4 | **133.0** | 33.2 | 665.0 | 906 / 1,295 | 29.48 / 29.86 | — | 0.86x |
-| `q38_bf16_tp8_ep8` | BF16 weights + BF16 KV, TP=8 × EP=8 | `4096` / `1024` | 16 | **436.4** | 109.1 | 2,181.8 | 2,217 / 3,982 | 34.74 / 36.33 | — | 0.88x |
-| `q38_bf16_tp8_ep8` | BF16 weights + BF16 KV, TP=8 × EP=8 | `4096` / `1024` | 32 | **749.1** | 187.3 | 3,745.3 | 3,973 / 7,466 | 38.71 / 42.21 | — | 0.92x |
-| `q38_bf16_tp8_ep8` | BF16 weights + BF16 KV, TP=8 × EP=8 | `4096` / `1024` | 64 | **979.7** | 244.9 | 4,898.5 | 7,896 / 18,342 | 47.93 / 54.99 | — | 0.93x |
-| `q38_bf16_tp8_ep8` | BF16 weights + BF16 KV, TP=8 × EP=8 | `65536` / `1024` | 1 | **31.5** | 7.9 | 2,044.5 | 3,813 / 3,818 | 28.08 / 28.09 | — | 0.89x |
-| `q38_bf16_tp8_ep8` | BF16 weights + BF16 KV, TP=8 × EP=8 | `65536` / `1024` | 4 | **88.9** | 22.2 | 5,779.1 | 9,374 / 14,943 | 35.85 / 41.30 | — | 0.91x |
-| `q38_bf16_tp8_ep8` | BF16 weights + BF16 KV, TP=8 × EP=8 | `131072` / `512` | 1 | **22.6** | 5.6 | 5,803.6 | 8,108 / 8,114 | 28.46 / 28.47 | — | 0.92x |
-| `q38_bf16_tp8_ep1` | BF16 weights + BF16 KV, TP=8 × EP=1 (80→128 pad) | `1024` / `1024` | 1 | **34.9** | 8.7 | 69.8 | 237 / 240 | 28.45 / 28.45 | — | 0.84x |
-| `q38_bf16_tp8_ep1` | BF16 weights + BF16 KV, TP=8 × EP=1 (80→128 pad) | `1024` / `1024` | 4 | **131.1** | 32.8 | 262.3 | 692 / 862 | 29.79 / 30.35 | — | 0.82x |
-| `q38_bf16_tp8_ep1` | BF16 weights + BF16 KV, TP=8 × EP=1 (80→128 pad) | `1024` / `1024` | 16 | **417.4** | 104.4 | 834.9 | 1,110 / 1,520 | 37.25 / 38.11 | — | 0.77x |
-| `q38_bf16_tp8_ep1` | BF16 weights + BF16 KV, TP=8 × EP=1 (80→128 pad) | `1024` / `1024` | 32 | **708.8** | 177.2 | 1,417.6 | 1,994 / 2,821 | 43.23 / 44.53 | — | 0.74x |
-| `q38_bf16_tp8_ep1` | BF16 weights + BF16 KV, TP=8 × EP=1 (80→128 pad) | `1024` / `1024` | 64 | **946.7** | 236.7 | 1,893.5 | 3,290 / 10,332 | 54.68 / 57.22 | — | 0.73x |
-| `q38_bf16_tp8_ep1` | BF16 weights + BF16 KV, TP=8 × EP=1 (80→128 pad) | `4096` / `1024` | 1 | **34.3** | 8.6 | 171.6 | 688 / 690 | 28.48 / 28.48 | — | 0.84x |
-| `q38_bf16_tp8_ep1` | BF16 weights + BF16 KV, TP=8 × EP=1 (80→128 pad) | `4096` / `1024` | 16 | **373.8** | 93.4 | 1,868.9 | 3,279 / 5,897 | 40.02 / 42.28 | — | 0.75x |
-| `q38_bf16_tp8_ep1` | BF16 weights + BF16 KV, TP=8 × EP=1 (80→128 pad) | `4096` / `1024` | 64 | **758.1** | 189.5 | 3,790.7 | 11,751 / 26,509 | 63.05 / 73.86 | — | 0.72x |
-| `q38_bf16_tp8_ep1` | BF16 weights + BF16 KV, TP=8 × EP=1 (80→128 pad) | `65536` / `1024` | 1 | **29.2** | 7.3 | 1,899.5 | 5,519 / 5,539 | 28.84 / 28.84 | — | 0.82x |
-| `q38_bf16_tp8_ep1` | BF16 weights + BF16 KV, TP=8 × EP=1 (80→128 pad) | `131072` / `512` | 1 | **19.3** | 4.8 | 4,972.5 | 11,512 / 11,575 | 29.22 / 29.22 | — | 0.79x |
-
-† `q38_fp8_tp8_ep8_mtp3` rows use greedy decoding on synthetic fixed-length prompts (`49.0%` `GSM8K` on multi-step arithmetic; see [Supported Configurations & Known Limitations](#known-limitations)). `q38_nvfp4_tp8_ep8` produced `NaN` logprobs (`0.0%` `GSM8K`) and is omitted from the throughput table.
+| Variant | Layout / Precision | In / Out | Conc. | Out tok/s | Out tok/s/chip | Total tok/s | TTFT p50 / p99 (ms) | TPOT p50 / p99 (ms) | vs `FP8 TP8 EP8` |
+|---|---|---|---:|---:|---:|---:|---|---|---:|
+| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `1024` / `1024` | 1 | **41.5** | 10.4 | 83.0 | 128 / 144 | 23.97 / 24.05 | 1.00x |
+| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `1024` / `1024` | 4 | **159.2** | 39.8 | 318.5 | 280 / 359 | 24.80 / 25.14 | 1.00x |
+| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `1024` / `1024` | 16 | **543.7** | 135.9 | 1,087.3 | 923 / 1,005 | 28.63 / 29.29 | 1.00x |
+| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `1024` / `1024` | 32 | **963.3** | 240.8 | 1,926.6 | 1,363 / 1,927 | 31.91 / 32.79 | 1.00x |
+| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `1024` / `1024` | 64 | **1,301.4** | 325.4 | 2,602.9 | 2,238 / 7,173 | 38.73 / 40.47 | 1.00x |
+| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `4096` / `1024` | 1 | **41.1** | 10.3 | 205.5 | 279 / 281 | 24.08 / 24.09 | 1.00x |
+| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `4096` / `1024` | 4 | **155.2** | 38.8 | 776.0 | 710 / 945 | 25.10 / 25.51 | 1.00x |
+| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `4096` / `1024` | 16 | **495.7** | 123.9 | 2,478.7 | 2,254 / 3,635 | 30.17 / 31.93 | 1.00x |
+| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `4096` / `1024` | 32 | **818.6** | 204.7 | 4,093.2 | 4,137 / 7,245 | 34.97 / 38.86 | 1.00x |
+| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `4096` / `1024` | 64 | **1,050.8** | 262.7 | 5,254.0 | 8,892 / 17,896 | 43.89 / 52.14 | 1.00x |
+| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `65536` / `1024` | 1 | **35.5** | 8.9 | 2,304.8 | 3,874 / 3,886 | 24.42 / 24.42 | 1.00x |
+| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `65536` / `1024` | 4 | **97.4** | 24.4 | 6,334.2 | 9,514 / 15,140 | 31.77 / 37.30 | 1.00x |
+| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `65536` / `1024` | 8 | **139.2** | 34.8 | 9,050.2 | 17,026 / 30,179 | 40.85 / 53.71 | 1.00x |
+| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `131072` / `512` | 1 | **24.5** | 6.1 | 6,294.6 | 8,212 / 8,234 | 24.80 / 24.80 | 1.00x |
+| `q38_fp8_tp8_ep8` | FP8 W8A8 blockwise, TP=8 × EP=8, BF16 KV | `131072` / `512` | 4 | **44.2** | 11.0 | 11,348.2 | 20,226 / 32,212 | 51.16 / 74.73 | 1.00x |
+| `q38_fp8_dp2attn_ep8` | FP8 W8A8 blockwise, TP=8 × DP=2 dp-attn × EP=8, BF16 KV | `1024` / `1024` | 1 | **30.8** | 7.7 | 61.6 | 259 / 310 | 32.25 / 32.26 | 0.74x |
+| `q38_fp8_dp2attn_ep8` | FP8 W8A8 blockwise, TP=8 × DP=2 dp-attn × EP=8, BF16 KV | `1024` / `1024` | 4 | **121.2** | 30.3 | 242.3 | 299 / 434 | 32.69 / 32.86 | 0.76x |
+| `q38_fp8_dp2attn_ep8` | FP8 W8A8 blockwise, TP=8 × DP=2 dp-attn × EP=8, BF16 KV | `1024` / `1024` | 16 | **435.1** | 108.8 | 870.3 | 897 / 1,563 | 35.98 / 36.36 | 0.80x |
+| `q38_fp8_dp2attn_ep8` | FP8 W8A8 blockwise, TP=8 × DP=2 dp-attn × EP=8, BF16 KV | `1024` / `1024` | 32 | **758.0** | 189.5 | 1,516.1 | 1,561 / 3,165 | 40.67 / 41.74 | 0.79x |
+| `q38_fp8_dp2attn_ep8` | FP8 W8A8 blockwise, TP=8 × DP=2 dp-attn × EP=8, BF16 KV | `1024` / `1024` | 64 | **1,273.4** | 318.4 | 2,546.8 | 3,357 / 5,700 | 46.97 / 49.60 | 0.98x |
+| `q38_fp8_dp2attn_ep8` | FP8 W8A8 blockwise, TP=8 × DP=2 dp-attn × EP=8, BF16 KV | `4096` / `1024` | 1 | **30.3** | 7.6 | 151.6 | 715 / 769 | 32.28 / 32.29 | 0.74x |
+| `q38_fp8_dp2attn_ep8` | FP8 W8A8 blockwise, TP=8 × DP=2 dp-attn × EP=8, BF16 KV | `4096` / `1024` | 16 | **390.6** | 97.7 | 1,953.1 | 3,358 / 5,765 | 38.04 / 40.45 | 0.79x |
+| `q38_fp8_dp2attn_ep8` | FP8 W8A8 blockwise, TP=8 × DP=2 dp-attn × EP=8, BF16 KV | `4096` / `1024` | 64 | **961.4** | 240.4 | 4,807.0 | 11,990 / 21,544 | 55.15 / 65.85 | 0.91x |
+| `q38_fp8_dp2attn_ep8` | FP8 W8A8 blockwise, TP=8 × DP=2 dp-attn × EP=8, BF16 KV | `65536` / `1024` | 1 | **23.0** | 5.7 | 1,493.6 | 11,157 / 11,171 | 32.63 / 32.63 | 0.65x |
+| `q38_fp8_dp2attn_ep8` | FP8 W8A8 blockwise, TP=8 × DP=2 dp-attn × EP=8, BF16 KV | `65536` / `1024` | 4 | **70.3** | 17.6 | 4,570.0 | 17,679 / 24,412 | 39.89 / 46.31 | 0.72x |
+| `q38_bf16_tp8_ep8` | BF16 weights + BF16 KV, TP=8 × EP=8 | `1024` / `1024` | 1 | **35.9** | 9.0 | 71.8 | 179 / 181 | 27.70 / 27.71 | 0.86x |
+| `q38_bf16_tp8_ep8` | BF16 weights + BF16 KV, TP=8 × EP=8 | `1024` / `1024` | 4 | **135.8** | 34.0 | 271.6 | 484 / 595 | 28.96 / 29.33 | 0.85x |
+| `q38_bf16_tp8_ep8` | BF16 weights + BF16 KV, TP=8 × EP=8 | `1024` / `1024` | 16 | **475.7** | 118.9 | 951.5 | 598 / 1,034 | 33.07 / 33.42 | 0.88x |
+| `q38_bf16_tp8_ep8` | BF16 weights + BF16 KV, TP=8 × EP=8 | `1024` / `1024` | 32 | **870.5** | 217.6 | 1,741.0 | 1,191 / 1,907 | 35.63 / 36.33 | 0.90x |
+| `q38_bf16_tp8_ep8` | BF16 weights + BF16 KV, TP=8 × EP=8 | `1024` / `1024` | 64 | **1,194.2** | 298.5 | 2,388.3 | 2,212 / 7,700 | 41.76 / 43.68 | 0.92x |
+| `q38_bf16_tp8_ep8` | BF16 weights + BF16 KV, TP=8 × EP=8 | `4096` / `1024` | 1 | **35.5** | 8.9 | 177.4 | 486 / 490 | 27.72 / 27.74 | 0.86x |
+| `q38_bf16_tp8_ep8` | BF16 weights + BF16 KV, TP=8 × EP=8 | `4096` / `1024` | 4 | **133.0** | 33.2 | 665.0 | 906 / 1,295 | 29.48 / 29.86 | 0.86x |
+| `q38_bf16_tp8_ep8` | BF16 weights + BF16 KV, TP=8 × EP=8 | `4096` / `1024` | 16 | **436.4** | 109.1 | 2,181.8 | 2,217 / 3,982 | 34.74 / 36.33 | 0.88x |
+| `q38_bf16_tp8_ep8` | BF16 weights + BF16 KV, TP=8 × EP=8 | `4096` / `1024` | 32 | **749.1** | 187.3 | 3,745.3 | 3,973 / 7,466 | 38.71 / 42.21 | 0.92x |
+| `q38_bf16_tp8_ep8` | BF16 weights + BF16 KV, TP=8 × EP=8 | `4096` / `1024` | 64 | **979.7** | 244.9 | 4,898.5 | 7,896 / 18,342 | 47.93 / 54.99 | 0.93x |
+| `q38_bf16_tp8_ep8` | BF16 weights + BF16 KV, TP=8 × EP=8 | `65536` / `1024` | 1 | **31.5** | 7.9 | 2,044.5 | 3,813 / 3,818 | 28.08 / 28.09 | 0.89x |
+| `q38_bf16_tp8_ep8` | BF16 weights + BF16 KV, TP=8 × EP=8 | `65536` / `1024` | 4 | **88.9** | 22.2 | 5,779.1 | 9,374 / 14,943 | 35.85 / 41.30 | 0.91x |
+| `q38_bf16_tp8_ep8` | BF16 weights + BF16 KV, TP=8 × EP=8 | `131072` / `512` | 1 | **22.6** | 5.6 | 5,803.6 | 8,108 / 8,114 | 28.46 / 28.47 | 0.92x |
+| `q38_bf16_tp8_ep1` | BF16 weights + BF16 KV, TP=8 × EP=1 (80→128 pad) | `1024` / `1024` | 1 | **34.9** | 8.7 | 69.8 | 237 / 240 | 28.45 / 28.45 | 0.84x |
+| `q38_bf16_tp8_ep1` | BF16 weights + BF16 KV, TP=8 × EP=1 (80→128 pad) | `1024` / `1024` | 4 | **131.1** | 32.8 | 262.3 | 692 / 862 | 29.79 / 30.35 | 0.82x |
+| `q38_bf16_tp8_ep1` | BF16 weights + BF16 KV, TP=8 × EP=1 (80→128 pad) | `1024` / `1024` | 16 | **417.4** | 104.4 | 834.9 | 1,110 / 1,520 | 37.25 / 38.11 | 0.77x |
+| `q38_bf16_tp8_ep1` | BF16 weights + BF16 KV, TP=8 × EP=1 (80→128 pad) | `1024` / `1024` | 32 | **708.8** | 177.2 | 1,417.6 | 1,994 / 2,821 | 43.23 / 44.53 | 0.74x |
+| `q38_bf16_tp8_ep1` | BF16 weights + BF16 KV, TP=8 × EP=1 (80→128 pad) | `1024` / `1024` | 64 | **946.7** | 236.7 | 1,893.5 | 3,290 / 10,332 | 54.68 / 57.22 | 0.73x |
+| `q38_bf16_tp8_ep1` | BF16 weights + BF16 KV, TP=8 × EP=1 (80→128 pad) | `4096` / `1024` | 1 | **34.3** | 8.6 | 171.6 | 688 / 690 | 28.48 / 28.48 | 0.84x |
+| `q38_bf16_tp8_ep1` | BF16 weights + BF16 KV, TP=8 × EP=1 (80→128 pad) | `4096` / `1024` | 16 | **373.8** | 93.4 | 1,868.9 | 3,279 / 5,897 | 40.02 / 42.28 | 0.75x |
+| `q38_bf16_tp8_ep1` | BF16 weights + BF16 KV, TP=8 × EP=1 (80→128 pad) | `4096` / `1024` | 64 | **758.1** | 189.5 | 3,790.7 | 11,751 / 26,509 | 63.05 / 73.86 | 0.72x |
+| `q38_bf16_tp8_ep1` | BF16 weights + BF16 KV, TP=8 × EP=1 (80→128 pad) | `65536` / `1024` | 1 | **29.2** | 7.3 | 1,899.5 | 5,519 / 5,539 | 28.84 / 28.84 | 0.82x |
+| `q38_bf16_tp8_ep1` | BF16 weights + BF16 KV, TP=8 × EP=1 (80→128 pad) | `131072` / `512` | 1 | **19.3** | 4.8 | 4,972.5 | 11,512 / 11,575 | 29.22 / 29.22 | 0.79x |
 
 ---
 
@@ -169,13 +155,13 @@ Applied idempotently to the container's `sglang` / `sglang_tpu` packages before 
 <a id="known-limitations"></a>
 ## 6. Supported Configurations & Known Limitations
 
-- **Recommended production configuration on 1-host TPU `v7x`:** `q38_fp8_tp8_ep8` (`Qwen/Qwen3.8-Flash-Next-FP8`, `--tp-size 8 --ep-size 8 --quantization fp8 --tpu-fp8-runtime blockwise --kv-cache-dtype bfloat16 --language-model-only`), which delivers full accuracy (`99.0%` Chat `GSM8K` on blockwise `FP8`) and highest non-speculative throughput from `1K` to `128K` context.
+- **Recommended production configuration on 1-host TPU `v7x`:** `q38_fp8_tp8_ep8` (`Qwen/Qwen3.8-Flash-Next-FP8`, `--tp-size 8 --ep-size 8 --quantization fp8 --tpu-fp8-runtime blockwise --kv-cache-dtype bfloat16 --language-model-only`), which delivers full accuracy (`99.0%` Chat `GSM8K` on blockwise `FP8`) and highest output-verified throughput from `1K` to `128K` context.
 - **Text-only serving (`--language-model-only`):** All benchmarks run text-only; multimodal vision encoding was not evaluated.
 - **QSA sparse indexer disabled (`indexer_n_heads: null`):** Context lengths above `2,048` tokens execute dense causal attention (`Pallas RPA v3`) rather than QSA top-k sparse attention.
 - **`BF16` KV cache requirement on uncalibrated checkpoints:** Using `--kv-cache-dtype fp8_e4m3` without calibrated `k_scale`/`v_scale` overflows `float8_e4m3fn` (`±448`) when `|v| > 448` and produces `NaN` attention outputs; use `--kv-cache-dtype bfloat16`.
 - **`FP8` with `EP=1` (`TP=8 × EP=1`) not supported:** With `moe_intermediate_size=640`, `TP=8 × EP=1` yields `80` intermediate channels/rank (`80 % 128 != 0`), which cannot partition `128 × 128` block-FP8 scales evenly; `EP=1` is supported on unquantized `BF16` (`q38_bf16_tp8_ep1`, `80 → 128` lane pad).
-- **`MTP-3` (`NEXTN`) PLE verify state rollback (`49.0%` GSM8K):** `q38_fp8_tp8_ep8_mtp3` (`SGLANG_TPU_ENABLE_EXPERIMENTAL_SPEC_WORKER=1`, `max_running_requests=32`) achieves `1.44×–2.51×` greedy throughput gains and passes short smoke prompts (`0` NaN logprobs), but layer-2 PLE `ShortConvPool` and `NGramPool` side states are not rolled back across rejected draft tokens during `TARGET_VERIFY`, reducing multi-hundred-token `GSM8K` accuracy from `99.0%` to `49.0%`. Do not use `MTP-3` for accuracy-critical multi-step generation until PLE draft-rejection state rollback is added.
-- **`NVFP4` (`RadixArk/Qwen3.8-Flash-Next-NVFP4`, `modelopt_fp4`) unsupported (`0.0%` GSM8K / `NaN` logprobs):** While the Pallas fused-RS `modelopt_fp4` kernel compiles and executes on TPU `v7x`, `Qwen4Exp` `FusedMoE` weight loading in `sglang-torchtpu v0.2.0` leaves `512`-expert `modelopt_fp4` input/group scales unmapped, producing `NaN` logprobs.
+- **MTP-3 speculative decoding (`NEXTN`):** MTP-3 speculative decoding is not yet output-equivalent on this stack (5-shot GSM8K `49.0%` vs `99.0%` without MTP) because PLE `ShortConvPool`/`NGramPool` state is not rolled back on rejected draft tokens; throughput is not reported until this is resolved.
+- **`NVFP4` (`RadixArk/Qwen3.8-Flash-Next-NVFP4`, `modelopt_fp4`) unsupported (`0.0%` GSM8K / `NaN` logprobs):** While the Pallas fused-RS `modelopt_fp4` kernel compiles and executes on TPU `v7x`, `Qwen4Exp` `FusedMoE` weight loading in `sglang-torchtpu v0.2.0` leaves `512`-expert `modelopt_fp4` input/group scales unmapped, producing `NaN` logprobs; throughput is not reported.
 
 ---
 
